@@ -32,6 +32,19 @@ pub async fn run_migrations(conn: &Connection) -> Result<(), libsql::Error> {
 pub async fn seed(conn: &Connection) -> Result<(), libsql::Error> {
     let now = now_secs();
 
+    // Billing catalog: the 'free' plan must exist because workspaces default to
+    // plan='free'. Stub limits; SaaS later gates modules/quota off this JSON.
+    let plan_exists = scalar_exists(conn, "SELECT 1 FROM plans WHERE id = ?1", "free").await?;
+    if !plan_exists {
+        tracing::info!("seeding default 'free' plan");
+        conn.execute(
+            "INSERT INTO plans (id, name, price_cents, currency, limits, created_at, updated_at) \
+             VALUES ('free', 'Free', 0, 'usd', '{}', ?1, ?2)",
+            libsql::params![now, now],
+        )
+        .await?;
+    }
+
     let exists = scalar_exists(conn, "SELECT 1 FROM workspaces WHERE id = ?1", DEFAULT_WORKSPACE).await?;
     if !exists {
         tracing::info!("seeding default personal workspace");
@@ -100,7 +113,21 @@ mod tests {
         let name: String = row.get(0).unwrap();
         assert_eq!(name, "Chayan Aggarwal");
 
+        // Acceptance (#2): seed creates exactly one workspace, one user, one owner
+        // membership - even after a second migrate+seed pass.
+        assert_eq!(count(&conn, "SELECT COUNT(*) FROM workspaces").await, 1);
+        assert_eq!(count(&conn, "SELECT COUNT(*) FROM users").await, 1);
+        assert_eq!(count(&conn, "SELECT COUNT(*) FROM memberships WHERE role='owner'").await, 1);
+        // Billing catalog seeded with the 'free' plan (control-plane stub).
+        assert_eq!(count(&conn, "SELECT COUNT(*) FROM plans WHERE id='free'").await, 1);
+
         let _ = std::fs::remove_file(path);
+    }
+
+    /// Helper: run a `SELECT COUNT(*)` and return the integer.
+    async fn count(conn: &Connection, sql: &str) -> i64 {
+        let mut rows = conn.query(sql, ()).await.unwrap();
+        rows.next().await.unwrap().unwrap().get(0).unwrap()
     }
 
     #[tokio::test]
