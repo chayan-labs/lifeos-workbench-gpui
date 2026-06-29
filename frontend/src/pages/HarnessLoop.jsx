@@ -89,6 +89,19 @@ export default function HarnessLoop() {
                     setTimeout(() => {
                       setIsPromoting(false);
                       setJudgeScore(91);
+                      
+                      // Push to local events log
+                      const customEvents = JSON.parse(localStorage.getItem('life_os_custom_events') || '[]');
+                      customEvents.unshift({
+                        id: "ev_" + Math.random().toString(36).substring(2, 9),
+                        ts: Date.now(),
+                        type: "config.promoted",
+                        actor: "release_loop",
+                        attrs: { config_id: "cfg_v2_rerank_prior", old_score: 88, new_score: 91 }
+                      });
+                      localStorage.setItem('life_os_custom_events', JSON.stringify(customEvents));
+                      
+                      alert("Successfully promoted cfg_v2_rerank_prior to active production config! Active weights rotated atomically.");
                     }, 1200);
                   }}
                   disabled={isPromoting}

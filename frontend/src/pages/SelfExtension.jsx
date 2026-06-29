@@ -43,6 +43,9 @@ export default function SelfExtension() {
         setLogs((prev) => [...prev, step]);
         if (step.text.includes('complete') || step.text.includes('aborted')) {
           setIsRunning(false);
+          if (step.text.includes('complete') && demoType === 'success') {
+            localStorage.setItem('life_os_module_health', 'true');
+          }
         }
       }, step.t);
     });

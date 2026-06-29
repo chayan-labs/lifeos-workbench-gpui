@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
-import { Database as DbIcon, Share2, Type, Tag, HelpCircle, Key, ArrowRight, Play, RefreshCw, AlertCircle, CheckCircle } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Database as DbIcon, Share2, Type, ArrowRight, Play, RefreshCw, Plus, CheckCircle, Database } from 'lucide-react';
 
-export default function Database() {
+export default function DatabaseView() {
   const [selectedEntity, setSelectedEntity] = useState('trade');
   const [jobs, setJobs] = useState([
     { id: 'job_ingest_001', kind: 'ingest', payload: '{"video_url":"https://r2.lifeos.db/clips/session_92.mp4"}', status: 'queued', priority: 2 },
@@ -9,6 +9,37 @@ export default function Database() {
     { id: 'job_eval_122', kind: 'eval', payload: '{"run_id":"run_49a_sonnet"}', status: 'done', priority: 1 },
     { id: 'job_oauth_019', kind: 'pipeline', payload: '{"sync":"figma_tokens"}', status: 'failed', priority: 3 }
   ]);
+
+  // Load custom entities from localStorage to support persistency in MVP
+  const [customEntities, setCustomEntities] = useState([]);
+  const [formModule, setFormModule] = useState('trading');
+  const [formType, setFormType] = useState('trade');
+  const [formTitle, setFormTitle] = useState('AAPL setup');
+  const [formAttrs, setFormAttrs] = useState('{\n  "ticker": "AAPL",\n  "pnl": 120.00,\n  "notes": "Broke out of bull flag"\n}');
+  const [apiStatus, setApiStatus] = useState('checking');
+
+  useEffect(() => {
+    const saved = localStorage.getItem('life_os_custom_entities');
+    if (saved) {
+      try {
+        setCustomEntities(JSON.parse(saved));
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    // Ping lifeos-api Axum server to check if it's awake
+    fetch('http://127.0.0.1:8080/api/health')
+      .then(res => res.json())
+      .then(data => {
+        if (data.status === 'healthy') {
+          setApiStatus('online');
+        } else {
+          setApiStatus('offline');
+        }
+      })
+      .catch(() => setApiStatus('offline'));
+  }, []);
 
   const triggerJobRun = (jobId) => {
     setJobs((prevJobs) => 
@@ -36,14 +67,6 @@ export default function Database() {
     { name: 'attrs', type: 'JSON', desc: 'Flexible key-value storage for domain-specific fields' },
   ];
 
-  const edgeTypes = [
-    { type: 'depends_on', desc: 'Prerequisite mapping (e.g., Topic A depends on Topic B)' },
-    { type: 'derived_from', desc: 'Visual models built from code/briefs' },
-    { type: 'publishes_to', desc: 'Marketing campaign link to social accounts' },
-    { type: 'uses_asset', desc: 'Figma mockups referenced in a blog post' },
-    { type: 'owns', desc: 'Parent workspace ownership structure' },
-  ];
-
   const entityDefinitions = {
     trade: {
       title: 'Trading Entity',
@@ -61,7 +84,7 @@ export default function Database() {
       },
       edges: [
         { label: 'depends_on', target: 'Topic: Technical Analysis' },
-        { label: 'uses_asset', target: 'Asset: AAPL Daily Chart Screenshot' }
+        { label: 'uses_asset', target: 'Asset: AAPL screenshot' }
       ]
     },
     task: {
@@ -99,26 +122,86 @@ export default function Database() {
     }
   };
 
-  const selectedData = entityDefinitions[selectedEntity];
+  const handleCreateEntity = (e) => {
+    e.preventDefault();
+    let parsedAttrs = {};
+    try {
+      parsedAttrs = JSON.parse(formAttrs);
+    } catch (err) {
+      alert("Invalid attributes JSON format.");
+      return;
+    }
+
+    const newId = "ent_" + Math.random().toString(36).substring(2, 10);
+    const newEnt = {
+      id: newId,
+      workspace_id: "default-personal-workspace",
+      module: formModule,
+      type: formType,
+      title: formTitle,
+      status: "active",
+      attrs: parsedAttrs,
+      edges: [],
+      created_at: Date.now()
+    };
+
+    const updated = [newEnt, ...customEntities];
+    setCustomEntities(updated);
+    localStorage.setItem('life_os_custom_entities', JSON.stringify(updated));
+
+    // Try posting to local Axum backend
+    fetch('http://127.0.0.1:8080/api/entity', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        module: formModule,
+        type: formType,
+        title: formTitle,
+        attrs: parsedAttrs
+      })
+    })
+      .then(res => res.json())
+      .then(data => console.log("[Database API] Saved on local server:", data))
+      .catch(err => console.warn("[Database API] Local server offline, saved locally only."));
+
+    alert("Entity created successfully!");
+  };
+
+  const selectedData = entityDefinitions[selectedEntity] || (customEntities.find(e => e.id === selectedEntity) ? {
+    title: customEntities.find(e => e.id === selectedEntity).title,
+    module: customEntities.find(e => e.id === selectedEntity).module,
+    type: customEntities.find(e => e.id === selectedEntity).type,
+    status: customEntities.find(e => e.id === selectedEntity).status,
+    attrs: customEntities.find(e => e.id === selectedEntity).attrs,
+    edges: []
+  } : null);
 
   return (
     <div className="flex flex-col gap-8">
       {/* Introduction Banner */}
-      <div className="neo-surface neo-border-thick neo-shadow p-6 bg-white">
-        <h2 className="neo-title-md mb-2 flex items-center gap-2">
-          <DbIcon size={24} className="text-[var(--neo-blue)]" />
-          The Notion Killer: One Generic Table
-        </h2>
-        <p className="neo-body-md text-[var(--neo-text-muted)]">
-          Unlike Notion, where users are forced to design custom schemas and tables for every new project, Life OS stores all domain models in a single, indexable, multi-tenant <strong>entities</strong> table. New domains require <strong>zero database migrations</strong>.
-        </p>
+      <div className="neo-surface neo-border-thick neo-shadow p-6 bg-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div>
+          <h2 className="neo-title-md mb-2 flex items-center gap-2">
+            <DbIcon size={24} className="text-[var(--neo-blue)]" />
+            The Notion Killer: One Generic Table
+          </h2>
+          <p className="neo-body-md text-[var(--neo-text-muted)]">
+            Life OS stores all domain models in a single, indexable, multi-tenant <strong>entities</strong> table. New domains require <strong>zero database migrations</strong>.
+          </p>
+        </div>
+        <div className={`neo-tag text-xs font-mono font-bold flex items-center gap-1.5 ${
+          apiStatus === 'online' ? 'bg-[var(--neo-mint)]' : 'bg-[var(--neo-red)] text-white'
+        }`}>
+          <div className={`w-2.5 h-2.5 rounded-full ${apiStatus === 'online' ? 'bg-black animate-pulse' : 'bg-white'}`} />
+          <span>Local API: {apiStatus.toUpperCase()}</span>
+        </div>
       </div>
 
-      {/* Database Schema Map */}
+      {/* Main interactive grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
         
         {/* Core Database Columns */}
-        <div className="lg:col-span-5 neo-surface neo-border-thick neo-shadow p-5 bg-white">
+        <div className="lg:col-span-4 neo-surface neo-border-thick neo-shadow p-5 bg-white">
           <h3 className="neo-title-md border-b-2 border-[var(--neo-border)] pb-3 mb-4 flex items-center gap-2">
             <Type size={18} />
             `entities` Schema
@@ -136,69 +219,147 @@ export default function Database() {
           </div>
         </div>
 
-        {/* Dynamic Mapping Playground */}
-        <div className="lg:col-span-7 flex flex-col gap-6">
-          <div className="neo-surface neo-border-thick neo-shadow p-5 bg-white flex-1">
+        {/* Dynamic Mapping Playground & Custom Entities Form */}
+        <div className="lg:col-span-8 flex flex-col gap-6">
+          <div className="neo-surface neo-border-thick neo-shadow p-5 bg-white">
             <h3 className="neo-title-md border-b-2 border-[var(--neo-border)] pb-3 mb-4">
-              Generic Row Translator
+              Row Translator & Live Viewer
             </h3>
             
             {/* Entity Selectors */}
-            <div className="flex gap-3 mb-6">
+            <div className="flex flex-wrap gap-2 mb-6">
               {['trade', 'task', 'campaign'].map((type) => (
                 <button
                   key={type}
                   onClick={() => setSelectedEntity(type)}
-                  className={`neo-btn py-2 px-4 neo-label-md flex-1 ${
+                  className={`neo-btn py-1.5 px-3 neo-label-sm ${
                     selectedEntity === type ? 'bg-[var(--neo-yellow)]' : 'bg-white'
                   }`}
                 >
-                  {type.toUpperCase()}
+                  {type.toUpperCase()} (SEED)
+                </button>
+              ))}
+
+              {customEntities.map((ent) => (
+                <button
+                  key={ent.id}
+                  onClick={() => setSelectedEntity(ent.id)}
+                  className={`neo-btn py-1.5 px-3 neo-label-sm ${
+                    selectedEntity === ent.id ? 'bg-[var(--neo-mint)]' : 'bg-white'
+                  }`}
+                >
+                  {ent.title.toUpperCase()} (CUSTOM)
                 </button>
               ))}
             </div>
 
             {/* Simulated Database Row */}
-            <div className="neo-border p-4 bg-gray-950 text-emerald-400 font-mono text-sm neo-radius overflow-x-auto shadow-inner">
-              <div className="text-xs text-gray-500 mb-2">// Simulated SQL row in entities table</div>
-              <div><span className="text-pink-400">id</span>: "d3b07384-d113-4cd4"</div>
-              <div><span className="text-pink-400">workspace_id</span>: "personal_workspace"</div>
-              <div><span className="text-pink-400">module</span>: "{selectedData.module}"</div>
-              <div><span className="text-pink-400">type</span>: "{selectedData.type}"</div>
-              <div><span className="text-pink-400">status</span>: "{selectedData.status}"</div>
-              <div><span className="text-pink-400">attrs</span>: {'{'}</div>
-              {Object.entries(selectedData.attrs).map(([key, val]) => (
-                <div key={key} className="pl-4">
-                  <span className="text-sky-400">"{key}"</span>: {typeof val === 'number' ? <span className="text-yellow-400">{val}</span> : <span className="text-orange-300">"{val}"</span>},
-                </div>
-              ))}
-              <div>{'}'}</div>
-            </div>
-
-            {/* Linked Edges (Graph Layer) */}
-            <div className="mt-6">
-              <h4 className="neo-label-md mb-3 text-[var(--neo-text-muted)]">Cross-Domain Graph Edges (`edges` table)</h4>
-              <div className="flex flex-col gap-2">
-                {selectedData.edges.map((edge, idx) => (
-                  <div key={idx} className="flex items-center gap-3 p-2 bg-[var(--neo-surface-muted)] neo-border text-xs font-semibold">
-                    <span className="neo-chip neo-chip--active py-0.5 text-[9px]">{selectedData.title}</span>
-                    <div className="flex items-center gap-1 text-[var(--neo-red)]">
-                      <Share2 size={12} />
-                      <span className="font-mono">{edge.label}</span>
-                    </div>
-                    <ArrowRight size={14} />
-                    <span className="neo-chip neo-chip--draft py-0.5 text-[9px]">{edge.target}</span>
+            {selectedData && (
+              <div className="neo-border p-4 bg-gray-950 text-emerald-400 font-mono text-sm neo-radius overflow-x-auto shadow-inner">
+                <div className="text-xs text-gray-500 mb-2">// Simulated SQL row in entities table</div>
+                <div><span className="text-pink-400">id</span>: "{selectedEntity.startsWith('ent_') ? selectedEntity : 'd3b07384-d113-4cd4'}"</div>
+                <div><span className="text-pink-400">workspace_id</span>: "personal_workspace"</div>
+                <div><span className="text-pink-400">module</span>: "{selectedData.module}"</div>
+                <div><span className="text-pink-400">type</span>: "{selectedData.type}"</div>
+                <div><span className="text-pink-400">status</span>: "{selectedData.status}"</div>
+                <div><span className="text-pink-400">attrs</span>: {'{'}</div>
+                {Object.entries(selectedData.attrs).map(([key, val]) => (
+                  <div key={key} className="pl-4">
+                    <span className="text-sky-400">"{key}"</span>: {typeof val === 'number' ? <span className="text-yellow-400">{val}</span> : <span className="text-orange-300">"{val}"</span>},
                   </div>
                 ))}
+                <div>{'}'}</div>
               </div>
-            </div>
+            )}
 
+            {/* Linked Edges (Graph Layer) */}
+            {selectedData && selectedData.edges && selectedData.edges.length > 0 && (
+              <div className="mt-6">
+                <h4 className="neo-label-md mb-3 text-[var(--neo-text-muted)]">Cross-Domain Graph Edges (`edges` table)</h4>
+                <div className="flex flex-col gap-2">
+                  {selectedData.edges.map((edge, idx) => (
+                    <div key={idx} className="flex items-center gap-3 p-2 bg-[var(--neo-surface-muted)] neo-border text-xs font-semibold">
+                      <span className="neo-chip neo-chip--active py-0.5 text-[9px]">{selectedData.title}</span>
+                      <div className="flex items-center gap-1 text-[var(--neo-red)]">
+                        <Share2 size={12} />
+                        <span className="font-mono">{edge.label}</span>
+                      </div>
+                      <ArrowRight size={14} />
+                      <span className="neo-chip neo-chip--draft py-0.5 text-[9px]">{edge.target}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Form to Add Entity */}
+          <div className="neo-surface neo-border-thick neo-shadow p-5 bg-white">
+            <h3 className="neo-title-md border-b-2 border-black pb-3 mb-4 flex items-center gap-2">
+              <Plus size={18} />
+              Insert Live Row Entity
+            </h3>
+
+            <form onSubmit={handleCreateEntity} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="flex flex-col gap-2">
+                <label className="neo-label-sm">Module Domain</label>
+                <select 
+                  value={formModule} 
+                  onChange={(e) => setFormModule(e.target.value)}
+                  className="p-2 neo-border bg-white text-xs font-semibold focus:outline-none"
+                >
+                  <option value="trading">trading</option>
+                  <option value="tasks">tasks</option>
+                  <option value="marketing">marketing</option>
+                  <option value="learning">learning</option>
+                </select>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <label className="neo-label-sm">Entity Type</label>
+                <input 
+                  type="text" 
+                  value={formType} 
+                  onChange={(e) => setFormType(e.target.value)}
+                  className="p-2 neo-border bg-white text-xs font-mono"
+                />
+              </div>
+
+              <div className="flex flex-col gap-2 md:col-span-2">
+                <label className="neo-label-sm">Display Title</label>
+                <input 
+                  type="text" 
+                  value={formTitle} 
+                  onChange={(e) => setFormTitle(e.target.value)}
+                  className="p-2 neo-border bg-white text-xs font-semibold"
+                />
+              </div>
+
+              <div className="flex flex-col gap-2 md:col-span-2">
+                <label className="neo-label-sm">Attributes JSON (attrs)</label>
+                <textarea 
+                  rows={4}
+                  value={formAttrs} 
+                  onChange={(e) => setFormAttrs(e.target.value)}
+                  className="p-2 neo-border bg-white text-xs font-mono"
+                />
+              </div>
+
+              <div className="md:col-span-2">
+                <button 
+                  type="submit" 
+                  className="neo-btn w-full bg-[var(--neo-mint)] py-2.5 px-4 font-bold uppercase text-xs"
+                >
+                  Create & Save Entity →
+                </button>
+              </div>
+            </form>
           </div>
         </div>
 
       </div>
 
-      {/* Unified Jobs Queue Section */}
+      {/* Jobs Queue Section */}
       <div className="neo-surface neo-border-thick neo-shadow p-5 bg-white">
         <h3 className="neo-title-md border-b-2 border-black pb-3 mb-4">
           Jobs Queue Manager (`jobs` table cloud ↔ Mac)

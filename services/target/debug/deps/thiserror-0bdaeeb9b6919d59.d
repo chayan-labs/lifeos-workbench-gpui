@@ -1,0 +1,12 @@
+/Users/chayanaggarwal/Desktop/SecondBrain/04_Projects/life-os/services/target/debug/deps/thiserror-0bdaeeb9b6919d59.d: /Users/chayanaggarwal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /Users/chayanaggarwal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /Users/chayanaggarwal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /Users/chayanaggarwal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /Users/chayanaggarwal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /Users/chayanaggarwal/Desktop/SecondBrain/04_Projects/life-os/services/target/debug/build/thiserror-0b884f68e831fd1e/out/private.rs
+
+/Users/chayanaggarwal/Desktop/SecondBrain/04_Projects/life-os/services/target/debug/deps/libthiserror-0bdaeeb9b6919d59.rmeta: /Users/chayanaggarwal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /Users/chayanaggarwal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /Users/chayanaggarwal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /Users/chayanaggarwal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /Users/chayanaggarwal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /Users/chayanaggarwal/Desktop/SecondBrain/04_Projects/life-os/services/target/debug/build/thiserror-0b884f68e831fd1e/out/private.rs
+
+/Users/chayanaggarwal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs:
+/Users/chayanaggarwal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs:
+/Users/chayanaggarwal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs:
+/Users/chayanaggarwal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs:
+/Users/chayanaggarwal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs:
+/Users/chayanaggarwal/Desktop/SecondBrain/04_Projects/life-os/services/target/debug/build/thiserror-0b884f68e831fd1e/out/private.rs:
+
+# env-dep:OUT_DIR=/Users/chayanaggarwal/Desktop/SecondBrain/04_Projects/life-os/services/target/debug/build/thiserror-0b884f68e831fd1e/out

@@ -13,10 +13,11 @@ import {
   X, 
   FileCode,
   Terminal,
-  FileText
+  FileText,
+  LogOut
 } from 'lucide-react';
 
-export default function Layout({ children }) {
+export default function Layout({ children, onLogout }) {
   const location = useLocation();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
@@ -143,6 +144,15 @@ export default function Layout({ children }) {
               <div className="w-2.5 h-2.5 rounded-full bg-[var(--neo-text)] animate-pulse" />
               <span>Turso replica synced</span>
             </div>
+            
+            <button
+              onClick={onLogout}
+              className="neo-btn p-2 bg-[var(--neo-red)] text-white hover:bg-[var(--neo-red)]/90 flex items-center gap-1 text-xs font-mono font-bold"
+              title="Logout session"
+            >
+              <LogOut size={16} />
+              <span className="hidden sm:inline">LOGOUT</span>
+            </button>
             
             <div className="w-10 h-10 neo-border neo-shadow bg-[var(--neo-yellow)] flex items-center justify-center font-bold">
               LO

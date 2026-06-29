@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
+import LoginPage from './pages/LoginPage';
 import Dashboard from './pages/Dashboard';
 import Database from './pages/Database';
 import Modules from './pages/Modules';
@@ -11,13 +12,26 @@ import Integrations from './pages/Integrations';
 import DocsHub from './pages/DocsHub';
 
 export default function App() {
+  const [isLoggedIn, setIsLoggedIn] = useState(
+    localStorage.getItem('life_os_loggedin') === 'true'
+  );
+
+  const handleLogout = () => {
+    localStorage.removeItem('life_os_loggedin');
+    setIsLoggedIn(false);
+  };
+
+  if (!isLoggedIn) {
+    return <LoginPage onLogin={() => setIsLoggedIn(true)} />;
+  }
+
   return (
     <BrowserRouter>
       <Routes>
         <Route
           path="/dashboard"
           element={
-            <Layout>
+            <Layout onLogout={handleLogout}>
               <Dashboard />
             </Layout>
           }
@@ -25,7 +39,7 @@ export default function App() {
         <Route
           path="/database"
           element={
-            <Layout>
+            <Layout onLogout={handleLogout}>
               <Database />
             </Layout>
           }
@@ -33,7 +47,7 @@ export default function App() {
         <Route
           path="/modules"
           element={
-            <Layout>
+            <Layout onLogout={handleLogout}>
               <Modules />
             </Layout>
           }
@@ -41,7 +55,7 @@ export default function App() {
         <Route
           path="/self-extension"
           element={
-            <Layout>
+            <Layout onLogout={handleLogout}>
               <SelfExtension />
             </Layout>
           }
@@ -49,7 +63,7 @@ export default function App() {
         <Route
           path="/harness-loop"
           element={
-            <Layout>
+            <Layout onLogout={handleLogout}>
               <HarnessLoop />
             </Layout>
           }
@@ -57,7 +71,7 @@ export default function App() {
         <Route
           path="/vcs-ingest"
           element={
-            <Layout>
+            <Layout onLogout={handleLogout}>
               <VcsIngest />
             </Layout>
           }
@@ -65,7 +79,7 @@ export default function App() {
         <Route
           path="/integrations"
           element={
-            <Layout>
+            <Layout onLogout={handleLogout}>
               <Integrations />
             </Layout>
           }
@@ -73,7 +87,7 @@ export default function App() {
         <Route
           path="/docs"
           element={
-            <Layout>
+            <Layout onLogout={handleLogout}>
               <DocsHub />
             </Layout>
           }
@@ -81,7 +95,7 @@ export default function App() {
         <Route
           path="/docs_hub"
           element={
-            <Layout>
+            <Layout onLogout={handleLogout}>
               <DocsHub />
             </Layout>
           }
@@ -89,7 +103,7 @@ export default function App() {
         <Route
           path="/docs-hub"
           element={
-            <Layout>
+            <Layout onLogout={handleLogout}>
               <DocsHub />
             </Layout>
           }

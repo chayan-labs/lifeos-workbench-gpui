@@ -1,12 +1,20 @@
 import React, { useState } from 'react';
-import { FileCode, Play, FileAudio, Image as ImageIcon, Search, GitCommit, FileText, ArrowRight, Eye, Diff } from 'lucide-react';
+import { FileCode, Play, FileAudio, Search, GitCommit, ArrowRight, Eye, Diff } from 'lucide-react';
 
 export default function VcsIngest() {
   const [transcriptionQuery, setTranscriptionQuery] = useState('Nango credentials proxy');
-  const [foundClips, setFoundClips] = useState([
+  const allClips = [
     { file: 'session_clip_382.mp3', text: '...the credentials actually reside inside self-hosted Nango proxy, meaning the agent context does not leak access tokens...', timestamp: '04:12 - 04:30', confidence: '98%' },
-    { file: 'meeting_notes_june.mp3', text: '...we should configure the proxy callback URL on the Cloudflare Worker to point to Nango...', timestamp: '12:05 - 12:20', confidence: '91%' }
-  ]);
+    { file: 'meeting_notes_june.mp3', text: '...we should configure the proxy callback URL on the Cloudflare Worker to point to Nango...', timestamp: '12:05 - 12:20', confidence: '91%' },
+    { file: 'trading_playbook_audio.wav', text: '...double bottom bounds are checked on chart screenshots using perceptual hash difference functions...', timestamp: '01:45 - 02:10', confidence: '89%' },
+    { file: 'vcs_overview.mp3', text: '...content-defined chunking or CDC uses blake3 hashes to deduplicate versions of large media files like video and assets...', timestamp: '08:50 - 09:30', confidence: '95%' }
+  ];
+
+  // Interactive query-based filtering
+  const foundClips = allClips.filter(c => 
+    c.text.toLowerCase().includes(transcriptionQuery.toLowerCase()) ||
+    c.file.toLowerCase().includes(transcriptionQuery.toLowerCase())
+  );
 
   const [selectedDiffFile, setSelectedDiffFile] = useState('image');
   const [diffResult, setDiffResult] = useState({
@@ -35,6 +43,13 @@ export default function VcsIngest() {
     { name: 'dashboard_mockup.fig', type: 'DESIGN', size: '4.8 MB', versions: 5, lastCommit: 'Brutalist box outline fix' },
     { name: 'audio_dictation_notes.wav', type: 'AUDIO', size: '32.1 MB', versions: 2, lastCommit: 'Transcript generated' },
   ];
+
+  // Interactive slider for FastCDC deduplication simulator
+  const [chunkSizeKb, setChunkSizeKb] = useState(64);
+  const totalBaseSizeMb = 120.4;
+  // Compute mock deduplication ratio based on chunk size
+  const dedupRatio = Math.max(12, Math.min(84, Math.round(92 - (chunkSizeKb / 4)))).toFixed(1);
+  const finalSizeMb = (totalBaseSizeMb * (1 - (parseFloat(dedupRatio) / 100))).toFixed(1);
 
   return (
     <div className="flex flex-col gap-8">
@@ -95,17 +110,14 @@ export default function VcsIngest() {
                   type="text"
                   value={transcriptionQuery}
                   onChange={(e) => setTranscriptionQuery(e.target.value)}
-                  placeholder="Search transcription clips..."
+                  placeholder="Type e.g. Nango, proxy, chart, blake3..."
                   className="neo-input w-full pl-10"
                 />
               </div>
-              <button className="neo-btn bg-[var(--neo-yellow)] py-2 px-4 neo-label-md">
-                FIND
-              </button>
             </div>
 
-            <div className="flex flex-col gap-3">
-              {foundClips.map((clip, idx) => (
+            <div className="flex flex-col gap-3 max-h-[300px] overflow-y-auto">
+              {foundClips.length > 0 ? foundClips.map((clip, idx) => (
                 <div key={idx} className="p-3 bg-white neo-border text-xs flex flex-col gap-2 relative">
                   <div className="flex justify-between items-center border-b border-gray-100 pb-1.5">
                     <span className="font-bold flex items-center gap-1">
@@ -119,17 +131,65 @@ export default function VcsIngest() {
                     <span className="text-[10px] font-mono bg-[var(--neo-bg)] px-1.5 py-0.5 border">
                       Timestamp: {clip.timestamp}
                     </span>
-                    <button className="text-[10px] text-[var(--neo-blue)] font-bold flex items-center gap-0.5 hover:underline">
+                    <button 
+                      onClick={() => alert(`Playing transcript segment of ${clip.file} starting at ${clip.timestamp.split(' - ')[0]}...`)}
+                      className="text-[10px] text-[var(--neo-blue)] font-bold flex items-center gap-0.5 hover:underline"
+                    >
                       Play Segment <Play size={10} className="fill-[var(--neo-blue)]" />
                     </button>
                   </div>
                 </div>
-              ))}
+              )) : (
+                <div className="text-center py-6 text-[var(--neo-text-muted)] italic text-xs">
+                  No matching transcript chunks found.
+                </div>
+              )}
             </div>
 
           </div>
         </div>
 
+      </div>
+
+      {/* FastCDC Deduplication Simulator */}
+      <div className="neo-surface neo-border-thick neo-shadow p-5 bg-white">
+        <h3 className="neo-title-md border-b-2 border-black pb-3 mb-4">
+          FastCDC Deduplication Simulator
+        </h3>
+        <p className="text-xs text-[var(--neo-text-muted)] mb-4">
+          Content-Defined Chunking splits file revisions dynamically to maximize block reuse. Move the slider to inspect the impact of block-size boundaries.
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
+          <div className="p-4 bg-[var(--neo-bg)] neo-border flex flex-col gap-2">
+            <label className="neo-label-sm font-bold block">TARGET CHUNK BOUNDARY: {chunkSizeKb} KB</label>
+            <input 
+              type="range" 
+              min={16} 
+              max={256} 
+              step={16}
+              value={chunkSizeKb} 
+              onChange={(e) => setChunkSizeKb(parseInt(e.target.value))}
+              className="w-full cursor-pointer h-2 bg-white rounded-none border-2 border-black accent-black"
+            />
+            <div className="flex justify-between text-[10px] font-mono text-[var(--neo-text-muted)]">
+              <span>16 KB</span>
+              <span>256 KB</span>
+            </div>
+          </div>
+
+          <div className="p-4 bg-white border-2 border-black text-center">
+            <span className="neo-label-sm block text-[var(--neo-text-muted)]">DEDUPLICATION RATIO</span>
+            <span className="neo-title-md text-3xl text-emerald-600 font-black block my-1">{dedupRatio}%</span>
+            <span className="text-[10px] block">Block reuse optimized</span>
+          </div>
+
+          <div className="p-4 bg-white border-2 border-black text-center">
+            <span className="neo-label-sm block text-[var(--neo-text-muted)]">STORED SIZE VS BASE</span>
+            <span className="neo-title-md text-3xl text-[var(--neo-blue)] font-black block my-1">{finalSizeMb} MB</span>
+            <span className="text-[10px] block">Down from {totalBaseSizeMb} MB</span>
+          </div>
+        </div>
       </div>
 
       {/* Semantic Diff Explorer Section */}
