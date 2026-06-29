@@ -102,4 +102,39 @@ mod tests {
 
         let _ = std::fs::remove_file(path);
     }
+
+    #[tokio::test]
+    async fn annotations_table_and_due_generated_column_exist() {
+        let path = "test_db_schema.db";
+        let conn = fresh(path).await;
+
+        // annotations table (spec §2.4) accepts a workspace-scoped note.
+        conn.execute(
+            "INSERT INTO annotations (id, workspace_id, entity_id, kind, body, created_by, created_at, updated_at) \
+             VALUES ('anno_1', ?1, 'ent_1', 'note', 'hello', 'user', 1, 1)",
+            libsql::params![DEFAULT_WORKSPACE],
+        )
+        .await
+        .unwrap();
+
+        // `due` is a GENERATED VIRTUAL column lifted from attrs (§7); it must be
+        // queryable and reflect json_extract(attrs,'$.due') without an explicit write.
+        conn.execute(
+            "INSERT INTO entities (id, workspace_id, module, type, attrs, created_at, updated_at) \
+             VALUES ('ent_1', ?1, 'tasks', 'task', '{\"due\": 1700000000}', 1, 1)",
+            libsql::params![DEFAULT_WORKSPACE],
+        )
+        .await
+        .unwrap();
+
+        let mut rows = conn
+            .query("SELECT due FROM entities WHERE id = 'ent_1'", ())
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().expect("entity row");
+        let due: i64 = row.get(0).unwrap();
+        assert_eq!(due, 1_700_000_000);
+
+        let _ = std::fs::remove_file(path);
+    }
 }
