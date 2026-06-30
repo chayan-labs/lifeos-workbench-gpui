@@ -56,8 +56,37 @@ export const LEARNING_MANIFEST = {
   ],
 };
 
+export const TASKS_MANIFEST = {
+  id: 'tasks',
+  name: 'Tasks / Productivity',
+  icon: '✅',
+  entityTypes: {
+    task: {
+      label: 'Task',
+      plural: 'Tasks',
+      display: { title: 'title', subtitle: 'label', badge: 'status' },
+    },
+    project: {
+      label: 'Project',
+      plural: 'Projects',
+      display: { title: 'title', subtitle: 'description' },
+    },
+    schedule_block: {
+      label: 'Schedule Block',
+      plural: 'Schedule Blocks',
+      display: { title: 'title', subtitle: 'start' },
+    },
+  },
+  views: [
+    { id: 'board', label: 'Board', kind: 'board', type: 'task', groupBy: 'status', columns: ['DRAFT', 'IN_PROGRESS', 'REVIEW', 'COMPLETED'] },
+    { id: 'today', label: 'Today', kind: 'list', type: 'task', filter: { field: 'due', onOrBefore: 'today' } },
+    { id: 'calendar', label: 'Calendar', kind: 'calendar', type: 'task', dateField: 'due' },
+  ],
+};
+
 export const MODULE_MANIFESTS = {
   learning: LEARNING_MANIFEST,
+  tasks: TASKS_MANIFEST,
 };
 
 export function getManifest(id) {

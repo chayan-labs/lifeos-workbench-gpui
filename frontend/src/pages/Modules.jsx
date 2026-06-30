@@ -148,7 +148,12 @@ export default function ModulesView() {
         status: 'DRAFT',
         attrs: { label: newTaskLabel },
       }).then(({ ok, data, offline }) => {
-        if (ok && !offline) saveTasks([entityToTask(data), ...tasks]);
+        if (ok && !offline) {
+          saveTasks([entityToTask(data), ...tasks]);
+          // Semantic event on top of the backend's generic entity.created -
+          // the Tasks manifest declares task.created (docs/MODULES.md §2.2).
+          apiCall('POST', '/api/event', { type: 'task.created', actor: 'user', entity_id: data.id, attrs: { title: data.title } });
+        }
       });
     } else {
       const newTask = { id: Date.now(), title: newTaskTitle, status: 'DRAFT', label: newTaskLabel };
@@ -166,7 +171,10 @@ export default function ModulesView() {
 
     if (tasksSource !== 'api') return;
     apiCall('PATCH', `/api/entity/${taskId}`, { status: nextStatus }).then(({ ok, offline }) => {
-      if (!ok || offline) saveTasks(prevTasks);
+      if (!ok || offline) { saveTasks(prevTasks); return; }
+      if (nextStatus === 'COMPLETED') {
+        apiCall('POST', '/api/event', { type: 'task.completed', actor: 'user', entity_id: taskId });
+      }
     });
   };
 

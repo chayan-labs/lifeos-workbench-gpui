@@ -6,8 +6,24 @@ import GenericBoard from './renderers/GenericBoard';
 import GenericCalendar from './renderers/GenericCalendar';
 import GenericDetail from './renderers/GenericDetail';
 import EntityDetailPanel from '../components/EntityDetailPanel';
+import { resolveField } from './renderers/displayHelpers';
 
 const KIND_RENDERERS = { list: GenericList, table: GenericTable, board: GenericBoard, calendar: GenericCalendar };
+
+// A view's optional `filter: { field, onOrBefore: 'today' }` narrows the
+// fetched entities client-side (the API has no date-range query params) -
+// e.g. the Tasks manifest's "Today" view (issue #40).
+function applyFilter(entities, filter) {
+  if (!filter) return entities;
+  if (filter.onOrBefore === 'today') {
+    const today = new Date().toISOString().slice(0, 10);
+    return entities.filter((e) => {
+      const raw = resolveField(e, filter.field);
+      return raw && String(raw).slice(0, 10) <= today;
+    });
+  }
+  return entities;
+}
 
 // Renders a day-1 module manifest (lib/moduleManifests.js) with zero bespoke
 // view code: a view picker over `manifest.views`, each backed by
@@ -35,6 +51,7 @@ export default function ModuleManifestPage({ manifest }) {
   }, [manifest.id, view?.type]);
 
   const Renderer = KIND_RENDERERS[view?.kind] || GenericList;
+  const viewEntities = applyFilter(entities, view?.filter);
 
   return (
     <div className="flex flex-col gap-6">
@@ -64,11 +81,11 @@ export default function ModuleManifestPage({ manifest }) {
         {state === 'offline' && <p className="text-xs text-neo-red font-bold">Backend unreachable.</p>}
         {state === 'loading' && <p className="text-xs text-neo-text-muted">Loading…</p>}
         {state === 'ready' && view?.kind === 'table' && (
-          <Renderer entities={entities} setEntities={setEntities} columns={view.columns} onRowClick={(e) => setSelectedId(e.id)} />
+          <Renderer entities={viewEntities} setEntities={setEntities} columns={view.columns} onRowClick={(e) => setSelectedId(e.id)} />
         )}
         {state === 'ready' && view?.kind !== 'table' && (
           <Renderer
-            entities={entities}
+            entities={viewEntities}
             setEntities={setEntities}
             display={entityType.display}
             dateField={view?.dateField}
