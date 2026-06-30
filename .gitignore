@@ -35,3 +35,7 @@ build/
 *.log
 .idea/
 .vscode/
+
+# Rust build artifacts
+/services/target/
+target/
