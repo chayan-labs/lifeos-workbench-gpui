@@ -1,5 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Terminal, Shield, CheckCircle, AlertTriangle, Play, RefreshCw, Zap, ShoppingBag, Info } from 'lucide-react';
+import { apiCall } from '../lib/api';
+
+const POLL_MS = 1500;
+const POLL_TIMEOUT_MS = 60000;
 
 export default function SelfExtension() {
   const [terminalInput, setTerminalInput] = useState('Create a Health Tracker module with daily step count, calorie intake, and water logging, and list board views.');
@@ -7,49 +11,96 @@ export default function SelfExtension() {
   const [isRunning, setIsRunning] = useState(false);
   const [demoType, setDemoType] = useState('success'); // success or bypass_blocked
   const [installNotice, setInstallNotice] = useState(null);
+  const pollRef = useRef(null);
   const [marketplaceModules, setMarketplaceModules] = useState([
     { id: 'm_health', name: 'Health Tracker', desc: 'Workout sessions, water target logs, calorie metric dashboard.', status: 'gated_sandbox', installs: 382, verified: true },
     { id: 'm_finance', name: 'Personal Finance', desc: 'Sync checks, recurring budgets, transaction audits.', status: 'approved', installs: 844, verified: true },
     { id: 'm_fitness', name: 'Fitness Visualizer', desc: 'Body mass telemetry plots, progress chart curves.', status: 'unverified', installs: 12, verified: false }
   ]);
 
-  const runSimulation = () => {
+  useEffect(() => () => clearTimeout(pollRef.current), []);
+
+  const appendLog = (text, type = 'info') => setLogs((prev) => [...prev, { text, type }]);
+
+  // Illustrative-only: the prompt-injection guardrail (PreToolUse hook + Seatbelt)
+  // runs inside the Mac harness's scaffold.js (self-extension epic, not yet built),
+  // so there is no real endpoint to call it against. Shown purely to explain the
+  // security model; never claims to have hit the network.
+  const runBlockedDemo = () => {
     setIsRunning(true);
     setLogs([]);
-    
-    const steps = demoType === 'success' ? [
-      { t: 0, text: 'POST /api/module-request { prompt: "health", workspace_id: "personal_workspace" }', type: 'info' },
-      { t: 600, text: '[Mac Engine] Launching Claude Agent SDK (Model: Claude 3.5 Sonnet)', type: 'info' },
-      { t: 1200, text: '[Seatbelt Sandbox] Gating file write access. Base directory restricted strictly to: modules/health/', type: 'success' },
-      { t: 1800, text: '[Scaffolder] Copying modules/_template/ -> modules/health/', type: 'info' },
-      { t: 2400, text: '[Scaffolder] Populating manifest fields and parsing schema using Zod schema structure...', type: 'info' },
-      { t: 3000, text: '[Validator 1] Running structural validator: checking types, views and commands...', type: 'info' },
-      { t: 3400, text: '>> STRUCTURAL VALIDATION PASSED. Found 3 views: list, board, calendar.', type: 'success' },
-      { t: 4000, text: '[Validator 2] Launching Headless Playwright instance against scratch mock replica DB...', type: 'info' },
-      { t: 4600, text: '>> HEADLESS TEST PASSED: Captured custom "module-mounted:health" event with 0 console errors.', type: 'success' },
-      { t: 5200, text: '[Git VCS] Creating atomic branch commit: feat: add health tracker module', type: 'success' },
-      { t: 5800, text: '[SSE Controller] Dispatching module.installed event to active app clients.', type: 'success' },
-      { t: 6400, text: '✅ Health Tracker Module successfully hot-loaded. Hot-reload complete!', type: 'success' }
-    ] : [
-      { t: 0, text: 'POST /api/module-request { prompt: "malicious_hack", workspace_id: "personal_workspace" }', type: 'info' },
-      { t: 600, text: '[Mac Engine] Launching Claude Agent SDK', type: 'info' },
-      { t: 1200, text: '[PreToolUse Hook] Intercepting file edit request: path="core/router.js"', type: 'warning' },
-      { t: 1800, text: '❌ ACTION DENIED: Hook failed closed. File paths outside of target modules/ are strictly blocked.', type: 'error' },
-      { t: 2400, text: '[Seatbelt Sandbox] Seatbelt kernel boundary check failed.', type: 'error' },
-      { t: 3000, text: '⚠️ Sandbox halted process. Zero files modified. Transaction aborted.', type: 'warning' }
+    const steps = [
+      { t: 0, text: '[demo - illustrative only, no network call] prompt: "malicious_hack"', type: 'info' },
+      { t: 500, text: '[Mac Engine] Launching Claude Agent SDK', type: 'info' },
+      { t: 1000, text: '[PreToolUse Hook] Intercepting file edit request: path="core/router.js"', type: 'warning' },
+      { t: 1500, text: '❌ ACTION DENIED: Hook failed closed. File paths outside of target modules/ are strictly blocked.', type: 'error' },
+      { t: 2000, text: '[Seatbelt Sandbox] Seatbelt kernel boundary check failed.', type: 'error' },
+      { t: 2500, text: '⚠️ Sandbox halted process. Zero files modified. Transaction aborted (demo).', type: 'warning' },
     ];
-
     steps.forEach((step) => {
       setTimeout(() => {
-        setLogs((prev) => [...prev, step]);
-        if (step.text.includes('complete') || step.text.includes('aborted')) {
-          setIsRunning(false);
-          if (step.text.includes('complete') && demoType === 'success') {
-            localStorage.setItem('life_os_module_health', 'true');
-          }
-        }
+        appendLog(step.text, step.type);
+        if (step === steps[steps.length - 1]) setIsRunning(false);
       }, step.t);
     });
+  };
+
+  // Real flow: POST /api/module-request, then poll /api/jobs for the enqueued
+  // module_build job and /api/event for module.requested/module.installed, and
+  // listen for the app-emitted module-mounted:<id> hot-reload event.
+  const runRequest = async () => {
+    if (demoType === 'bypass_blocked') return runBlockedDemo();
+    const prompt = terminalInput.trim();
+    if (!prompt) return;
+    setIsRunning(true);
+    setLogs([]);
+    clearTimeout(pollRef.current);
+
+    appendLog(`POST /api/module-request { prompt: ${JSON.stringify(prompt)} }`, 'info');
+    const { ok, data, error, offline } = await apiCall('POST', '/api/module-request', { prompt });
+    if (!ok) {
+      appendLog(`❌ Request failed: ${offline ? 'backend unreachable' : error}`, 'error');
+      setIsRunning(false);
+      return;
+    }
+    const { request_id: requestId, job_id: jobId } = data;
+    appendLog(`✅ Queued. request_id=${requestId} job_id=${jobId}`, 'success');
+
+    const onMounted = (e) => {
+      appendLog(`🔔 module-mounted:${e.detail?.id || '?'} - hot-reload event received.`, 'success');
+    };
+    window.addEventListener('lifeos:module-mounted', onMounted);
+
+    const startedAt = Date.now();
+    let lastStatus = 'queued';
+    const poll = async () => {
+      const jobsRes = await apiCall('GET', `/api/jobs?limit=50`);
+      const job = jobsRes.ok ? (jobsRes.data?.items || jobsRes.data || []).find((j) => j.id === jobId) : null;
+      if (job && job.status !== lastStatus) {
+        lastStatus = job.status;
+        appendLog(`[jobs] ${jobId} -> ${job.status}`, job.status === 'failed' ? 'error' : 'info');
+      }
+      if (job && (job.status === 'done' || job.status === 'completed')) {
+        appendLog('✅ Build finished. Watching for hot-reload…', 'success');
+        window.removeEventListener('lifeos:module-mounted', onMounted);
+        setIsRunning(false);
+        return;
+      }
+      if (job && job.status === 'failed') {
+        appendLog(`❌ Build failed honestly: ${job.error || 'no error detail recorded'} (the self-extension builder is not implemented yet - see the Self-Extension epic).`, 'error');
+        window.removeEventListener('lifeos:module-mounted', onMounted);
+        setIsRunning(false);
+        return;
+      }
+      if (Date.now() - startedAt > POLL_TIMEOUT_MS) {
+        appendLog('⏱ Stopped polling after 60s - check the Jobs tab in Database for live status.', 'warning');
+        window.removeEventListener('lifeos:module-mounted', onMounted);
+        setIsRunning(false);
+        return;
+      }
+      pollRef.current = setTimeout(poll, POLL_MS);
+    };
+    pollRef.current = setTimeout(poll, POLL_MS);
   };
 
   const handleInstallMarketplace = (id) => {
@@ -110,7 +161,7 @@ export default function SelfExtension() {
                 className="neo-input flex-1 text-sm font-mono"
               />
               <button
-                onClick={runSimulation}
+                onClick={runRequest}
                 disabled={isRunning}
                 className="neo-btn bg-neo-yellow py-2 px-4 neo-label-md flex items-center gap-2"
               >
