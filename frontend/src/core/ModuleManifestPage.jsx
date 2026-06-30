@@ -4,12 +4,13 @@ import GenericList from './renderers/GenericList';
 import GenericTable from './renderers/GenericTable';
 import GenericBoard from './renderers/GenericBoard';
 import GenericCalendar from './renderers/GenericCalendar';
+import GenericGallery from './renderers/GenericGallery';
 import GenericDetail from './renderers/GenericDetail';
 import EntityDetailPanel from '../components/EntityDetailPanel';
 import GenericMetricChart from './metrics/GenericMetricChart';
 import { resolveField } from './renderers/displayHelpers';
 
-const KIND_RENDERERS = { list: GenericList, table: GenericTable, board: GenericBoard, calendar: GenericCalendar };
+const KIND_RENDERERS = { list: GenericList, table: GenericTable, board: GenericBoard, calendar: GenericCalendar, gallery: GenericGallery };
 
 // A view's optional `filter: { field, onOrBefore: 'today' }` narrows the
 // fetched entities client-side (the API has no date-range query params) -
@@ -111,6 +112,7 @@ export default function ModuleManifestPage({ manifest }) {
             dateField={view?.dateField}
             groupByField={view?.groupBy}
             columns={view?.columns}
+            mediaField={view?.mediaField}
             onSelect={(e) => setSelectedId(e.id)}
           />
         )}

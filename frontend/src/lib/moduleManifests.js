@@ -285,6 +285,54 @@ export const MARKETING_MANIFEST = {
   ],
 };
 
+// mcp-figma (read+write) and mcp-higgsfield (generation) are loaded
+// on-demand via mcp-multiplexer when actually invoked, never mounted
+// always-on (docs/INTEGRATIONS.md token-discipline rule) - this manifest has
+// no UI of its own that calls them yet (that needs an agent/console surface,
+// not a view), so it stays an honest gallery + library over whatever assets
+// already exist. Per-type semantic diff for design files is lifeos-vcs work,
+// explicitly deferred to Phase 6.
+export const DESIGN_MANIFEST = {
+  id: 'design',
+  name: 'Design',
+  icon: '🎨',
+  entityTypes: {
+    design_file: {
+      label: 'Design File (Figma)',
+      plural: 'Design Files',
+      display: { title: 'title', subtitle: (e) => e.attrs?.figma_url },
+    },
+    component: {
+      label: 'Component',
+      plural: 'Components',
+      display: { title: 'title', subtitle: (e) => e.attrs?.derived_from },
+    },
+    token: {
+      label: 'Token',
+      plural: 'Tokens',
+      display: { title: 'title', subtitle: (e) => e.attrs?.value },
+    },
+    asset: {
+      label: 'Asset',
+      plural: 'Assets',
+      display: { title: 'title', badge: (e) => e.attrs?.kind },
+    },
+    brief: {
+      label: 'Brief',
+      plural: 'Briefs',
+      display: { title: 'title' },
+    },
+  },
+  views: [
+    { id: 'gallery', label: 'Assets', kind: 'gallery', type: 'asset', mediaField: 'blob_ref' },
+    { id: 'library', label: 'Component Library', kind: 'table', type: 'component', columns: [
+      { key: 'title', label: 'Component' },
+      { key: 'derived_from', label: 'Derived From' },
+    ] },
+    { id: 'files', label: 'Design Files', kind: 'list', type: 'design_file' },
+  ],
+};
+
 export const MODULE_MANIFESTS = {
   learning: LEARNING_MANIFEST,
   tasks: TASKS_MANIFEST,
@@ -292,6 +340,7 @@ export const MODULE_MANIFESTS = {
   trading: TRADING_MANIFEST,
   social: SOCIAL_MANIFEST,
   marketing: MARKETING_MANIFEST,
+  design: DESIGN_MANIFEST,
 };
 
 export function getManifest(id) {
