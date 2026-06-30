@@ -49,6 +49,12 @@ pub fn verify_token(secret: &str, token: &str) -> Option<Claims> {
     .ok()
 }
 
+/// Returns the verified claims from the request's bearer token, if present
+/// and valid. Used by `/api/me` to surface the authenticated user.
+pub fn bearer_claims(headers: &HeaderMap, secret: &str) -> Option<Claims> {
+    bearer(headers).and_then(|token| verify_token(secret, &token))
+}
+
 fn bearer(headers: &HeaderMap) -> Option<String> {
     headers
         .get(axum::http::header::AUTHORIZATION)

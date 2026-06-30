@@ -12,6 +12,7 @@ mod register;
 mod edge;
 mod search;
 mod stream;
+mod workspace;
 
 use crate::state::AppState;
 use axum::{
@@ -24,6 +25,8 @@ pub fn router(state: AppState) -> Router {
         // --- liveness + identity ---
         .route("/api/health", get(health::health))
         .route("/api/register", post(register::register))
+        .route("/api/me", get(workspace::me))
+        .route("/api/workspace", get(workspace::get_workspace).patch(workspace::update_workspace))
         // --- generic entity CRUD (the spine the whole system rests on) ---
         .route("/api/entity", post(entity::create).get(entity::list))
         .route("/api/entity/:id", get(entity::get_one).patch(entity::update))

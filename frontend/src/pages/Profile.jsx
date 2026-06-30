@@ -1,45 +1,76 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   User, Building2, KeyRound, Save, Check, CreditCard, Gauge,
-  ShieldCheck, Database, Boxes, FolderGit2, Crown, ShieldAlert, Lock, Wand2
+  ShieldCheck, Database, Boxes, FolderGit2, Crown, ShieldAlert, Lock, Wand2, Repeat
 } from 'lucide-react';
 import { LAYERS } from '../lib/capabilities';
 import { getCapabilityMatrix } from '../lib/capabilityMatrix';
-import { WORKSPACE_ID_KEY } from '../lib/api';
+import { apiCall, WORKSPACE_ID_KEY } from '../lib/api';
 
 const read = (k, fallback = '') => localStorage.getItem(k) || fallback;
 
 const PLANS = [
-  { id: 'personal', name: 'Personal', price: 'Free', features: ['1 workspace', 'Local Mac harness', 'Unlimited modules'] },
+  { id: 'free', name: 'Personal', price: 'Free', features: ['1 workspace', 'Local Mac harness', 'Unlimited modules'] },
   { id: 'pro', name: 'Pro', price: '$19/mo', features: ['5 workspaces', 'Cloud bot lane', 'Priority codegen'] },
   { id: 'team', name: 'Team', price: '$49/seat', features: ['Unlimited workspaces', 'Shared modules', 'SSO + audit log'] },
 ];
 
 export default function Profile() {
-  const [name, setName] = useState(read('life_os_user_name', 'Chayan Aggarwal'));
-  const [email] = useState(read('life_os_user_email', 'chayan@life-os.dev'));
-  const [workspaceName, setWorkspaceName] = useState(read('life_os_workspace_name', 'Personal Brain'));
-  const workspaceId = read(WORKSPACE_ID_KEY, 'default-personal-workspace');
-  const plan = read('life_os_plan', 'personal');
-  const [activePlan, setActivePlan] = useState(plan);
+  const [workspaceIdInput, setWorkspaceIdInput] = useState(read(WORKSPACE_ID_KEY, 'default-personal-workspace'));
+  const [workspace, setWorkspace] = useState(null); // { id, name, plan } from GET /api/workspace
+  const [workspaceName, setWorkspaceName] = useState('');
+  const [activePlan, setActivePlan] = useState('free');
+  const [me, setMe] = useState(null); // GET /api/me - { authenticated, id, email, name }
+  const [usageRaw, setUsageRaw] = useState(null); // GET /api/metrics
   const [saved, setSaved] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-  const handleSave = () => {
-    localStorage.setItem('life_os_user_name', name.trim());
-    localStorage.setItem('life_os_workspace_name', workspaceName.trim());
-    localStorage.setItem('life_os_plan', activePlan);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+  const loadAll = useCallback(async () => {
+    setLoading(true);
+    const [wsRes, meRes, metricsRes] = await Promise.all([
+      apiCall('GET', '/api/workspace'),
+      apiCall('GET', '/api/me'),
+      apiCall('GET', '/api/metrics'),
+    ]);
+    if (wsRes.ok) {
+      setWorkspace(wsRes.data);
+      setWorkspaceName(wsRes.data.name);
+      setActivePlan(wsRes.data.plan || 'free');
+    }
+    if (meRes.ok) setMe(meRes.data);
+    if (metricsRes.ok) setUsageRaw(metricsRes.data);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { loadAll(); }, [loadAll]);
+
+  // Switching the workspace id changes the X-Workspace-Id header every
+  // subsequent apiCall sends (lib/api.js reads it fresh from localStorage on
+  // every request) - this is the P0 wiring this issue requires.
+  const switchWorkspace = () => {
+    localStorage.setItem(WORKSPACE_ID_KEY, workspaceIdInput.trim() || 'default-personal-workspace');
+    loadAll();
   };
 
+  const handleSave = async () => {
+    const { ok, data } = await apiCall('PATCH', '/api/workspace', { name: workspaceName.trim(), plan: activePlan });
+    if (ok) {
+      setWorkspace(data);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    }
+  };
+
+  const name = me?.authenticated ? (me.name || me.email) : 'Demo user (no key_token)';
+  const email = me?.authenticated ? me.email : read('life_os_user_email', 'chayan@life-os.dev');
   const initials = name.split(' ').map((p) => p[0]).join('').slice(0, 2).toUpperCase() || 'LO';
 
-  const usage = [
-    { label: 'Entities stored', value: '2,481', max: '10,000', icon: Database, pct: 25 },
-    { label: 'Modules installed', value: '7', max: '∞', icon: Boxes, pct: 14 },
-    { label: 'Versioned files', value: '342', max: '5,000', icon: FolderGit2, pct: 7 },
-    { label: 'Harness runs (mo)', value: '128', max: '1,000', icon: Gauge, pct: 13 },
-  ];
+  const usage = usageRaw ? [
+    { label: 'Entities stored', value: String(usageRaw.entities), max: '∞', icon: Database, pct: Math.min(100, usageRaw.entities) },
+    { label: 'Modules touched', value: String(Object.keys(usageRaw.entities_by_module || {}).length), max: '∞', icon: Boxes, pct: 14 },
+    { label: 'Events logged', value: String(usageRaw.events), max: '∞', icon: FolderGit2, pct: Math.min(100, usageRaw.events) },
+    { label: 'Harness runs', value: String(usageRaw.harness_runs), max: '∞', icon: Gauge, pct: Math.min(100, usageRaw.harness_runs) },
+  ] : [];
 
   return (
     <div className="flex flex-col gap-8 max-w-5xl">
@@ -65,7 +96,7 @@ export default function Profile() {
 
           <label className="flex flex-col gap-1">
             <span className="neo-label-sm text-neo-text-muted">Display Name</span>
-            <input className="neo-input" value={name} onChange={(e) => setName(e.target.value)} />
+            <input className="neo-input opacity-60 cursor-not-allowed" value={name} disabled title="Set at registration via POST /api/register - no update-user route exists yet." />
           </label>
 
           <label className="flex flex-col gap-1">
@@ -79,8 +110,18 @@ export default function Profile() {
           </label>
 
           <label className="flex flex-col gap-1">
-            <span className="neo-label-sm text-neo-text-muted flex items-center gap-1"><KeyRound size={12} /> Tenant ID</span>
-            <code className="neo-input font-mono text-xs flex items-center text-neo-text-muted">{workspaceId}</code>
+            <span className="neo-label-sm text-neo-text-muted flex items-center gap-1"><KeyRound size={12} /> Tenant ID (X-Workspace-Id)</span>
+            <div className="flex gap-2">
+              <input
+                className="neo-input font-mono text-xs flex-1"
+                value={workspaceIdInput}
+                onChange={(e) => setWorkspaceIdInput(e.target.value)}
+              />
+              <button onClick={switchWorkspace} className="neo-btn bg-neo-surface-high text-neo-text px-3 flex items-center gap-1.5 text-xs font-bold shrink-0">
+                <Repeat size={13} /> Switch
+              </button>
+            </div>
+            <span className="text-[10px] text-neo-text-muted">Resolved workspace: <code>{workspace?.id || '…'}</code> - changing this updates every request's <code>X-Workspace-Id</code> header.</span>
           </label>
 
           <button onClick={handleSave} className="neo-btn bg-neo-mint text-neo-text py-2 px-4 flex items-center justify-center gap-2 self-start">
@@ -91,6 +132,8 @@ export default function Profile() {
         {/* Usage */}
         <div className="lg:col-span-5 neo-surface neo-border-thick neo-shadow p-5 flex flex-col gap-4">
           <h3 className="neo-title-md flex items-center gap-2"><Gauge size={18} /> Usage</h3>
+          {loading && <p className="text-xs text-neo-text-muted">Loading…</p>}
+          {!loading && !usage.length && <p className="text-xs text-neo-text-muted">No metrics yet.</p>}
           {usage.map((u) => (
             <div key={u.label} className="flex flex-col gap-1">
               <div className="flex justify-between items-center neo-label-sm">
