@@ -1,14 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { 
-  Database, 
-  Terminal, 
-  Cpu, 
-  Zap, 
-  Smartphone, 
-  Laptop, 
-  ArrowRight, 
-  Clock, 
+import {
+  Database,
+  Terminal,
+  Cpu,
+  Zap,
+  Smartphone,
+  Laptop,
+  ArrowRight,
+  Clock,
   CheckCircle,
   FileCode,
   ShieldCheck,
@@ -16,11 +16,29 @@ import {
   RefreshCw,
   Plus,
   ToggleLeft,
-  ToggleRight
+  ToggleRight,
+  AlertTriangle
 } from 'lucide-react';
+import { apiCall } from '../lib/api';
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState('architecture');
+  const [metrics, setMetrics] = useState(null);
+  const [metricsState, setMetricsState] = useState('loading'); // 'loading' | 'ready' | 'offline'
+
+  useEffect(() => {
+    let cancelled = false;
+    apiCall('GET', '/api/metrics').then(({ ok, data, offline }) => {
+      if (cancelled) return;
+      if (ok && !offline && data) {
+        setMetrics(data);
+        setMetricsState('ready');
+      } else {
+        setMetricsState('offline');
+      }
+    });
+    return () => { cancelled = true; };
+  }, []);
   const [pipelineRunning, setPipelineRunning] = useState(false);
   const [pipelineLogs, setPipelineLogs] = useState([
     { stage: '1. memvec.recall', status: 'idle', icon: Database },
@@ -77,11 +95,14 @@ export default function Dashboard() {
     setActions(actions.map(act => act.id === actionId ? { ...act, active: !act.active } : act));
   };
 
+  // Live aggregates from GET /api/metrics; null fields render as '-' while
+  // loading/offline rather than fabricating a count.
+  const moduleCount = metrics ? Object.keys(metrics.entities_by_module || {}).length : null;
   const stats = [
-    { name: 'Total Entities', value: '4,892', change: '+124 today', icon: Database, color: 'var(--neo-yellow)' },
-    { name: 'Active Modules', value: '7 Seed + 2 Self-Built', change: 'Hot-loaded', icon: Cpu, color: 'var(--neo-mint)' },
-    { name: 'Harness Runs Logged', value: '843', change: 'Avg cost $0.08/day', icon: Terminal, color: 'var(--neo-blue-bright)' },
-    { name: 'Nango Connections', value: '9 Active', change: '6 oauth + 3 custom', icon: ShieldCheck, color: 'var(--neo-red)' },
+    { name: 'Total Entities', value: metrics?.entities, change: `${metrics?.events ?? 0} events logged`, icon: Database, color: 'var(--neo-yellow)' },
+    { name: 'Active Modules', value: moduleCount, change: 'By distinct entity module', icon: Cpu, color: 'var(--neo-mint)' },
+    { name: 'Harness Runs Logged', value: metrics?.harness_runs, change: `Avg cost $${(metrics?.cost ?? 0).toFixed(2)}`, icon: Terminal, color: 'var(--neo-blue-bright)' },
+    { name: 'Active Connections', value: metrics?.active_connections, change: `${metrics?.jobs_queued ?? 0} jobs queued`, icon: ShieldCheck, color: 'var(--neo-red)' },
   ];
 
   return (
@@ -111,18 +132,24 @@ export default function Dashboard() {
             <div className="flex justify-between items-start">
               <div>
                 <span className="neo-label-sm text-neo-text-muted block mb-1">{stat.name}</span>
-                <span className="neo-title-md block">{stat.value}</span>
+                <span className="neo-title-md block">
+                  {metricsState === 'loading' ? '...' : metricsState === 'offline' ? '-' : stat.value}
+                </span>
               </div>
-              <div 
-                className="w-10 h-10 neo-border flex items-center justify-center" 
+              <div
+                className="w-10 h-10 neo-border flex items-center justify-center"
                 style={{ backgroundColor: stat.color }}
               >
                 <stat.icon size={20} className="text-neo-text" />
               </div>
             </div>
             <div className="mt-4 pt-3 border-t-2 border-neo-border border-dashed flex justify-between items-center">
-              <span className="neo-label-sm text-neo-text-muted">{stat.change}</span>
-              <span className="neo-chip neo-chip--completed py-0.5 text-[10px]">ACTIVE</span>
+              <span className="neo-label-sm text-neo-text-muted">{metricsState === 'offline' ? 'Backend unreachable' : stat.change}</span>
+              {metricsState === 'offline' ? (
+                <span className="neo-chip neo-chip--review py-0.5 text-[10px] flex items-center gap-1"><AlertTriangle size={10} /> OFFLINE</span>
+              ) : (
+                <span className="neo-chip neo-chip--completed py-0.5 text-[10px]">ACTIVE</span>
+              )}
             </div>
           </div>
         ))}
