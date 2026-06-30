@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import AIEdit from '../components/ui/AIEdit';
+import { apiCall } from '../lib/api';
 import {
   GraduationCap, 
   CheckSquare, 
@@ -31,13 +32,32 @@ export default function ModulesView() {
   const [activeModule, setActiveModule] = useState('tasks');
   const [viewStyle, setViewStyle] = useState('board'); // board, list, calendar, graph, gallery, timeline, map
 
-  // Task Board state (with localStorage persistency)
+  // Task Board state. Source of truth is `entities` (module=tasks, type=task)
+  // via the live API; localStorage is only the offline fallback shown until a
+  // connection succeeds.
   const [tasks, setTasks] = useState([
     { id: 1, title: 'Map ENCODE GraphQL API schema', status: 'IN_PROGRESS', label: 'GENETICS' },
     { id: 2, title: 'Write SQLite FTS5 index trigger', status: 'REVIEW', label: 'CORE' },
     { id: 3, title: 'Setup Nango instance on fly.io', status: 'COMPLETED', label: 'DEVOPS' },
     { id: 4, title: 'Verify broker-guard closed bounds', status: 'OVERDUE', label: 'TRADING' },
   ]);
+  const [tasksSource, setTasksSource] = useState('local'); // 'local' | 'api'
+
+  const entityToTask = (ent) => ({
+    id: ent.id,
+    title: ent.title,
+    status: ent.status,
+    label: (ent.attrs && ent.attrs.label) || 'CORE',
+  });
+
+  const loadTasksFromApi = () => {
+    apiCall('GET', '/api/entity?module=tasks&type=task').then(({ ok, data, offline }) => {
+      if (ok && !offline && Array.isArray(data) && data.length > 0) {
+        setTasks(data.map(entityToTask));
+        setTasksSource('api');
+      }
+    });
+  };
 
   // Social account connection draft status
   const [socialDrafts, setSocialDrafts] = useState([
@@ -78,11 +98,13 @@ export default function ModulesView() {
     if (isHealthInstalled) {
       setInstalledModules([{ id: 'health', label: 'Health Tracker', icon: Heart, color: 'var(--neo-mint)' }]);
     }
+
+    loadTasksFromApi();
   }, []);
 
   const saveTasks = (newTasks) => {
     setTasks(newTasks);
-    localStorage.setItem('life_os_tasks', JSON.stringify(newTasks));
+    if (tasksSource === 'local') localStorage.setItem('life_os_tasks', JSON.stringify(newTasks));
   };
 
   // Quick form for adding task
@@ -92,20 +114,35 @@ export default function ModulesView() {
   const handleAddTask = (e) => {
     e.preventDefault();
     if (!newTaskTitle) return;
-    const newTask = {
-      id: Date.now(),
-      title: newTaskTitle,
-      status: 'DRAFT',
-      label: newTaskLabel
-    };
-    const updated = [newTask, ...tasks];
-    saveTasks(updated);
+
+    if (tasksSource === 'api') {
+      apiCall('POST', '/api/entity', {
+        module: 'tasks',
+        type: 'task',
+        title: newTaskTitle,
+        status: 'DRAFT',
+        attrs: { label: newTaskLabel },
+      }).then(({ ok, data, offline }) => {
+        if (ok && !offline) saveTasks([entityToTask(data), ...tasks]);
+      });
+    } else {
+      const newTask = { id: Date.now(), title: newTaskTitle, status: 'DRAFT', label: newTaskLabel };
+      saveTasks([newTask, ...tasks]);
+    }
     setNewTaskTitle('');
   };
 
+  // Optimistic move: update the board immediately, persist via PATCH, and
+  // roll back to the prior status if the server rejects it.
   const moveTask = (taskId, nextStatus) => {
+    const prevTasks = tasks;
     const updated = tasks.map(t => t.id === taskId ? { ...t, status: nextStatus } : t);
     saveTasks(updated);
+
+    if (tasksSource !== 'api') return;
+    apiCall('PATCH', `/api/entity/${taskId}`, { status: nextStatus }).then(({ ok, offline }) => {
+      if (!ok || offline) saveTasks(prevTasks);
+    });
   };
 
   // Social Draft Approval

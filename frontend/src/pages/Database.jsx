@@ -453,16 +453,28 @@ export default function DatabaseView() {
                 {liveEntities.map((ent) => (
                   <tr
                     key={ent.id}
-                    onClick={() => setDetailEntityId(ent.id)}
-                    className="border-b border-neo-border/40 cursor-pointer hover:bg-neo-surface-muted"
+                    className="border-b border-neo-border/40 hover:bg-neo-surface-muted"
                   >
-                    <td className="py-2 pr-4 font-mono">{ent.id}</td>
+                    <td className="py-2 pr-4 font-mono cursor-pointer" onClick={() => setDetailEntityId(ent.id)}>{ent.id}</td>
                     <td className="py-2 pr-4">{ent.module}</td>
                     <td className="py-2 pr-4">{ent.type}</td>
-                    <td className="py-2 pr-4">
-                      <span className="neo-chip py-0.5 text-[9px]">{ent.status}</span>
+                    <td className="py-2 pr-4" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        defaultValue={ent.status}
+                        onBlur={(e) => {
+                          const next = e.target.value.trim();
+                          if (!next || next === ent.status) return;
+                          setLiveEntities((prev) => prev.map((x) => x.id === ent.id ? { ...x, status: next } : x));
+                          apiCall('PATCH', `/api/entity/${ent.id}`, { status: next }).then(({ ok, offline }) => {
+                            if (!ok || offline) {
+                              setLiveEntities((prev) => prev.map((x) => x.id === ent.id ? { ...x, status: ent.status } : x));
+                            }
+                          });
+                        }}
+                        className="neo-chip py-0.5 text-[9px] w-24 bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-neo-blue"
+                      />
                     </td>
-                    <td className="py-2 pr-4 truncate max-w-xs">{ent.title}</td>
+                    <td className="py-2 pr-4 truncate max-w-xs cursor-pointer" onClick={() => setDetailEntityId(ent.id)}>{ent.title}</td>
                   </tr>
                 ))}
               </tbody>
