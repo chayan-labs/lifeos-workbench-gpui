@@ -104,6 +104,7 @@ export default function Layout({ children, onLogout }) {
       items: [
         { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
         { name: 'Knowledge', href: '/knowledge', icon: Compass },
+        { name: 'Learning', href: '/m/learning', icon: Sparkles },
         { name: 'Modules', href: '/modules', icon: Cpu },
         { name: 'Database', href: '/database', icon: Database },
         { name: 'Graph', href: '/graph', icon: GitBranch },
