@@ -1,0 +1,24 @@
+{
+  "name": "@lifeos/db",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "main": "dist/schema.js",
+  "types": "dist/schema.d.ts",
+  "exports": {
+    ".": "./dist/schema.js",
+    "./client/worker": "./dist/client.worker.js",
+    "./client/mac": "./dist/client.mac.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.17.4",
+    "drizzle-orm": "^0.45.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}
