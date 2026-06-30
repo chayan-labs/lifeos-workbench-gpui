@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Database as DbIcon, Share2, Type, ArrowRight, Play, RefreshCw, Plus, CheckCircle, ChevronLeft, ChevronRight } from 'lucide-react';
 import { apiCall } from '../lib/api';
+import EntityDetailPanel from '../components/EntityDetailPanel';
 
 const PAGE_SIZE = 20;
 
@@ -18,6 +19,7 @@ export default function DatabaseView() {
   const [liveState, setLiveState] = useState('loading'); // 'loading' | 'ready' | 'offline'
   const [liveFilters, setLiveFilters] = useState({ module: '', type: '', status: '' });
   const [livePage, setLivePage] = useState(0);
+  const [detailEntityId, setDetailEntityId] = useState(null);
 
   const loadLiveEntities = useCallback(() => {
     setLiveState('loading');
@@ -449,7 +451,11 @@ export default function DatabaseView() {
               </thead>
               <tbody>
                 {liveEntities.map((ent) => (
-                  <tr key={ent.id} className="border-b border-neo-border/40">
+                  <tr
+                    key={ent.id}
+                    onClick={() => setDetailEntityId(ent.id)}
+                    className="border-b border-neo-border/40 cursor-pointer hover:bg-neo-surface-muted"
+                  >
                     <td className="py-2 pr-4 font-mono">{ent.id}</td>
                     <td className="py-2 pr-4">{ent.module}</td>
                     <td className="py-2 pr-4">{ent.type}</td>
@@ -526,6 +532,8 @@ export default function DatabaseView() {
           ))}
         </div>
       </div>
+
+      <EntityDetailPanel entityId={detailEntityId} onClose={() => setDetailEntityId(null)} />
     </div>
   );
 }
