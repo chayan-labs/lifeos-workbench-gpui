@@ -1,80 +1,80 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+//! lifeos-drain: the Mac-side job queue consumer. Polls `jobs`, atomically
+//! claims one at a time, dispatches by kind, and reaps crashed claims.
+//!
+//! Config (env): LIFEOS_DB_PATH (default `lifeos.db`),
+//! LIFEOS_DRAIN_POLL_SECS (3), LIFEOS_DRAIN_STUCK_TTL_SECS (300),
+//! LIFEOS_DRAIN_MAX_ATTEMPTS (3).
+
 use libsql::Builder;
+use lifeos_drain::{claim_job, complete_job, dispatch, fail_job, reap_stuck, Dispatch, DrainConfig};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 
-fn get_current_epoch() -> u64 {
+fn now_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("Time went backwards")
-        .as_secs()
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn env_int(key: &str, default: i64) -> i64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
 }
 
 #[tokio::main]
 async fn main() {
-    println!("lifeos-drain starting... Atomic job queue consumer running.");
-    
-    let db_path = "lifeos.db";
-    let db = match Builder::new_local(db_path).build().await {
+    let db_path = std::env::var("LIFEOS_DB_PATH").unwrap_or_else(|_| "lifeos.db".to_string());
+    let poll = Duration::from_secs(env_int("LIFEOS_DRAIN_POLL_SECS", 3).max(1) as u64);
+    let cfg = DrainConfig {
+        stuck_ttl_secs: env_int("LIFEOS_DRAIN_STUCK_TTL_SECS", 300),
+        max_attempts: env_int("LIFEOS_DRAIN_MAX_ATTEMPTS", 3),
+    };
+
+    let db = match Builder::new_local(&db_path).build().await {
         Ok(db) => db,
         Err(e) => {
-            eprintln!("Failed to open DB: {}", e);
-            return;
+            eprintln!("lifeos-drain: failed to open {db_path}: {e}");
+            std::process::exit(1);
         }
     };
-    let conn = db.connect().unwrap();
-    
-    let worker_id = format!("mac-drain-{}", get_current_epoch());
-    println!("Worker identified as: {}", worker_id);
+    let conn = db.connect().expect("connect");
+    // Wait rather than error on a write lock so two drainers cooperate.
+    let _ = conn.execute("PRAGMA busy_timeout = 5000", ()).await;
+
+    let worker_id = format!("mac-drain-{}", now_secs());
+    println!("lifeos-drain: worker {worker_id} on {db_path} (poll {poll:?}, {cfg:?})");
 
     loop {
-        // Atomic claim
-        let claim_sql = r#"
-            UPDATE jobs SET status='running', claimed_by=?1, claimed_at=?2
-            WHERE id = (SELECT id FROM jobs
-                        WHERE status='queued' AND (run_after IS NULL OR run_after<=?3)
-                        ORDER BY priority DESC, created_at ASC LIMIT 1)
-            RETURNING id, kind, payload;
-        "#;
-        
-        let now = get_current_epoch();
-        let mut stmt = match conn.prepare(claim_sql).await {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("Prepare failed: {}", e);
-                sleep(Duration::from_secs(5)).await;
-                continue;
-            }
-        };
-
-        match stmt.query(libsql::params![worker_id.clone(), now as i64, now as i64]).await {
-            Ok(mut rows) => {
-                if let Ok(Some(row)) = rows.next().await {
-                    let job_id: String = row.get(0).unwrap();
-                    let kind: String = row.get(1).unwrap();
-                    let payload: String = row.get(2).unwrap();
-                    
-                    println!("Claimed job {}: kind={}, payload={}", job_id, kind, payload);
-                    
-                    // Simulate job execution
-                    sleep(Duration::from_secs(2)).await;
-                    
-                    // Mark as done
-                    let _ = conn.execute("UPDATE jobs SET status='done' WHERE id=?1", libsql::params![job_id.clone()]).await;
-                    println!("Finished job {}", job_id);
-                } else {
-                    // No jobs available
-                }
-            },
-            Err(e) => {
-                eprintln!("Query failed: {}", e);
-            }
+        match claim_job(&conn, &worker_id, now_secs(), cfg).await {
+            Ok(Some(job)) => run_job(&conn, &job).await,
+            Ok(None) => {}
+            Err(e) => eprintln!("lifeos-drain: claim failed: {e}"),
         }
+        match reap_stuck(&conn, now_secs(), cfg).await {
+            Ok(n) if n > 0 => println!("lifeos-drain: reaped {n} stuck job(s)"),
+            Ok(_) => {}
+            Err(e) => eprintln!("lifeos-drain: reaper failed: {e}"),
+        }
+        sleep(poll).await;
+    }
+}
 
-        // Reaper for stuck jobs (5 minutes timeout)
-        let reaper_sql = "UPDATE jobs SET status='queued', claimed_by=NULL, claimed_at=NULL WHERE status='running' AND claimed_at < ?1";
-        let timeout_thresh = now - 300;
-        let _ = conn.execute(reaper_sql, libsql::params![timeout_thresh as i64]).await;
-
-        sleep(Duration::from_secs(3)).await;
+async fn run_job(conn: &libsql::Connection, job: &lifeos_drain::ClaimedJob) {
+    println!("lifeos-drain: claimed {} (kind={})", job.id, job.kind);
+    let result = match dispatch(&job.kind) {
+        Dispatch::Stub(handler) => {
+            println!("lifeos-drain: {} -> {handler} (stub, no-op this phase)", job.id);
+            complete_job(conn, &job.id).await
+        }
+        Dispatch::Unknown => {
+            eprintln!("lifeos-drain: unknown kind '{}' for {} - failing", job.kind, job.id);
+            fail_job(conn, &job.id).await
+        }
+    };
+    if let Err(e) = result {
+        eprintln!("lifeos-drain: status update for {} failed: {e}", job.id);
     }
 }
