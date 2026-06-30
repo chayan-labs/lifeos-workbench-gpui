@@ -6,8 +6,17 @@
 
 import { apiCall } from './api';
 
+export const SELECTED_AGENT_KEY = 'life_os_selected_agent';
+
+// The agent picked in AgentHarness (or undefined for the backend's default).
+// Exported so every direct apiCall('POST', '/api/llm', ...) call site applies
+// the user's choice, not just callers that go through complete() below.
+export function selectedAgent() {
+  return localStorage.getItem(SELECTED_AGENT_KEY) || undefined;
+}
+
 async function complete(system, prompt) {
-  const { ok, data } = await apiCall('POST', '/api/llm', { system, prompt });
+  const { ok, data } = await apiCall('POST', '/api/llm', { system, prompt, agent: selectedAgent() });
   if (ok && data && (data.text || typeof data === 'string')) {
     return data.text || data;
   }

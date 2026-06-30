@@ -3,28 +3,34 @@ import {
   Boxes, RefreshCw, Cpu, Layers, ShieldAlert, Check, Terminal,
   Zap, Brain, Wrench, GitMerge, Crown, CircleDot, Power
 } from 'lucide-react';
+import { apiCall } from '../lib/api';
+import { SELECTED_AGENT_KEY } from '../lib/ai';
 
 /*
- * Open design harness composer (frontend showcase).
- * - Auto-detects which coding agents are present on the host (mocked).
+ * Open design harness composer.
+ * - Detected agents come from GET /api/agents - the backend's real PATH scan
+ *   (services/lifeos-api/src/agents.rs), not a hardcoded list.
+ * - The chosen agent is persisted as the resolver AND as the agent every
+ *   POST /api/llm call site uses (see lib/ai.js::selectedAgent).
  * - Layers the Life OS app harness on top of the chosen agent's base harness.
  * - Conflicts between the two layers are resolved by the USER'S chosen agent.
  * - The user picks which parts of the base/system harness to inherit.
- * All selections persist to localStorage; ready to wire to a real probe later.
  */
 
 const HS = 'life_os_harness_state';
 
-// Registry of agents the platform knows how to layer onto. `detected` is the
-// mock probe result - in a real build this comes from a local Mac-side scan.
-const AGENT_REGISTRY = [
-  { id: 'claude-code', name: 'Claude Code', vendor: 'Anthropic', detected: true, version: '2.x', base: 'Hooks + Skills + Subagents' },
-  { id: 'codex-cli', name: 'Codex CLI', vendor: 'OpenAI', detected: true, version: '0.9', base: 'Tool registry + sandbox' },
-  { id: 'hermes', name: 'Hermes', vendor: 'Local', detected: true, version: 'on-demand', base: 'Router + memvec recall' },
-  { id: 'antigravity', name: 'Antigravity', vendor: 'Google', detected: false, version: '-', base: 'Agentic IDE harness' },
-  { id: 'gemini-cli', name: 'Gemini CLI', vendor: 'Google', detected: false, version: '-', base: 'MCP + tools' },
-  { id: 'aider', name: 'Aider', vendor: 'OSS', detected: false, version: '-', base: 'Repo-map + git' },
-];
+// Adapter-id -> display metadata not carried by the API response (vendor,
+// "base" description). Falls back to a generic card for any future adapter
+// added server-side without a frontend update.
+const AGENT_META = {
+  claude: { name: 'Claude Code', vendor: 'Anthropic', base: 'Hooks + Skills + Subagents' },
+  gemini: { name: 'Gemini CLI', vendor: 'Google', base: 'MCP + tools' },
+  codex: { name: 'OpenAI Codex', vendor: 'OpenAI', base: 'Tool registry + sandbox' },
+  opencode: { name: 'OpenCode', vendor: 'OSS', base: 'Repo-map + tool calls' },
+  hermes: { name: 'Hermes Agent', vendor: 'Local', base: 'Router + memvec recall' },
+  openclaw: { name: 'OpenClaw', vendor: 'OSS', base: 'Agentic IDE harness' },
+};
+const metaFor = (id) => AGENT_META[id] || { name: id, vendor: 'Unknown', base: '-' };
 
 // Parts of the base/system harness the user may choose to inherit.
 const SYSTEM_PARTS = [
@@ -52,7 +58,7 @@ const loadState = () => {
     if (s) return s;
   } catch {}
   return {
-    userAgent: 'claude-code',
+    userAgent: null, // resolved once GET /api/agents reports a default
     parts: Object.fromEntries(SYSTEM_PARTS.map((p) => [p.id, true])),
     resolutions: Object.fromEntries(CONFLICTS.map((c) => [c.id, 'agent-merge'])),
   };
@@ -61,19 +67,39 @@ const loadState = () => {
 export default function AgentHarness() {
   const [state, setState] = useState(loadState);
   const [scanning, setScanning] = useState(false);
-  const [agents, setAgents] = useState(AGENT_REGISTRY);
+  const [agents, setAgents] = useState([]);
+  const [agentsState, setAgentsState] = useState('loading'); // 'loading' | 'ready' | 'offline'
 
   useEffect(() => {
     localStorage.setItem(HS, JSON.stringify(state));
+    if (state.userAgent) localStorage.setItem(SELECTED_AGENT_KEY, state.userAgent);
   }, [state]);
 
   const rescan = () => {
     setScanning(true);
-    setTimeout(() => {
-      setAgents(AGENT_REGISTRY);
+    apiCall('GET', '/api/agents').then(({ ok, data, offline }) => {
       setScanning(false);
-    }, 1100);
+      if (ok && !offline && data) {
+        const detectedAgents = (data.agents || []).map((a) => ({
+          id: a.id,
+          name: metaFor(a.id).name,
+          vendor: metaFor(a.id).vendor,
+          base: metaFor(a.id).base,
+          detected: true,
+          version: a.verified ? 'verified' : 'unverified contract',
+          path: a.path,
+        }));
+        setAgents(detectedAgents);
+        setAgentsState('ready');
+        // Keep the user's explicit choice; otherwise track the backend default.
+        setState((s) => ({ ...s, userAgent: s.userAgent || data.default || detectedAgents[0]?.id || null }));
+      } else {
+        setAgentsState('offline');
+      }
+    });
   };
+
+  useEffect(() => { rescan(); }, []);
 
   const detected = agents.filter((a) => a.detected);
   const userAgent = agents.find((a) => a.id === state.userAgent);
@@ -102,6 +128,12 @@ export default function AgentHarness() {
             <RefreshCw size={12} className={scanning ? 'animate-spin' : ''} /> {scanning ? 'Scanning host…' : 'Re-scan host'}
           </button>
         </div>
+        {agentsState === 'offline' && (
+          <div className="px-3 py-2 bg-neo-red text-white text-xs font-bold neo-border">Backend unreachable - cannot scan PATH for agent CLIs.</div>
+        )}
+        {agentsState === 'ready' && detected.length === 0 && (
+          <div className="px-3 py-2 bg-neo-surface-muted text-xs neo-border">No known agent CLI found on PATH.</div>
+        )}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           {agents.map((a) => {
             const isUser = state.userAgent === a.id;

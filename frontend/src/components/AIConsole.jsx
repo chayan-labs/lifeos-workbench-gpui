@@ -4,6 +4,7 @@ import MarkdownRenderer from './MarkdownRenderer';
 import { routeIntent, canAI } from '../lib/capabilities';
 import { apiCall } from '../lib/api';
 import { commit as vcsCommit } from '../lib/vcs';
+import { selectedAgent } from '../lib/ai';
 
 // The app-wide AI surface. Mounted once in Layout; openable from anywhere via:
 //   window.dispatchEvent(new CustomEvent('lifeos:ai', { detail: { prefill, layer } }))
@@ -69,6 +70,7 @@ export default function AIConsole() {
     const { ok, data } = await apiCall('POST', '/api/llm', {
       system: 'You are the in-app builder for Life OS. Describe the concrete change you would make, briefly.',
       prompt: `User request: ${text}\nLayers in scope: ${scope}`,
+      agent: selectedAgent(),
     });
     const plan = (ok && (data?.text || data)) ||
       `**Proposed change** (local plan - \`/api/llm\` not connected):\n\n- Target: ${scope}\n- ${text}\n\nThis is reversible: once applied it's committed to VCS, so you can time-travel back anytime.`;
