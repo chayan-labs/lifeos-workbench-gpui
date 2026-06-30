@@ -58,6 +58,12 @@ pub async fn connect(config: &Config) -> Result<Db, libsql::Error> {
     };
 
     let conn = database.connect()?;
+    // Enforce the FK constraints the schema declares. SQLite/libSQL default this
+    // OFF per connection, so without it every `workspace_id`/`user_id` FK is
+    // decorative and orphaned cross-tenant rows can be inserted - the exact
+    // integrity guard the multi-tenant model relies on. Must run before any
+    // writes (migrations/seed) on this connection.
+    conn.execute("PRAGMA foreign_keys = ON", ()).await?;
     run_migrations(&conn).await?;
     seed(&conn).await?;
     // Create the derived schema in its own file FIRST (triggers/FTS DDL can't be

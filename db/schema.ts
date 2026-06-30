@@ -154,7 +154,11 @@ export const jobs = sqliteTable(
     createdAt: integer("created_at").notNull(),
   },
   (table) => [
-    index("ix_jobs_claim").on(table.status, table.priority, table.createdAt),
+    // Mirrors migrations/0001_core.sql: (status, priority DESC, created_at).
+    // priority DESC matters - lifeos-drain claims the highest-priority job first.
+    // This drizzle version expresses column ordering via raw sql (IndexColumn =
+    // SQLiteColumn | SQL), not a `.desc()` column method.
+    index("ix_jobs_claim").on(table.status, sql`${table.priority} DESC`, table.createdAt),
   ],
 );
 
