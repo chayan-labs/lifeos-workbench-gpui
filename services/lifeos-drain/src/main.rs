@@ -49,7 +49,7 @@ async fn main() {
 
     loop {
         match claim_job(&conn, &worker_id, now_secs(), cfg).await {
-            Ok(Some(job)) => run_job(&conn, &job).await,
+            Ok(Some(job)) => run_job(&conn, &job, &worker_id).await,
             Ok(None) => {}
             Err(e) => eprintln!("lifeos-drain: claim failed: {e}"),
         }
@@ -62,19 +62,26 @@ async fn main() {
     }
 }
 
-async fn run_job(conn: &libsql::Connection, job: &lifeos_drain::ClaimedJob) {
+async fn run_job(conn: &libsql::Connection, job: &lifeos_drain::ClaimedJob, worker_id: &str) {
     println!("lifeos-drain: claimed {} (kind={})", job.id, job.kind);
     let result = match dispatch(&job.kind) {
         Dispatch::Stub(handler) => {
             println!("lifeos-drain: {} -> {handler} (stub, no-op this phase)", job.id);
-            complete_job(conn, &job.id).await
+            complete_job(conn, &job.id, worker_id).await
         }
         Dispatch::Unknown => {
             eprintln!("lifeos-drain: unknown kind '{}' for {} - failing", job.kind, job.id);
-            fail_job(conn, &job.id).await
+            fail_job(conn, &job.id, worker_id).await
         }
     };
-    if let Err(e) = result {
-        eprintln!("lifeos-drain: status update for {} failed: {e}", job.id);
+    match result {
+        // 0 rows = this worker no longer holds the lease (reaped + re-claimed
+        // while it was working). Don't overwrite the new owner's claim.
+        Ok(0) => eprintln!(
+            "lifeos-drain: lease lost for {} (reaped + re-claimed); skipping status write",
+            job.id
+        ),
+        Ok(_) => {}
+        Err(e) => eprintln!("lifeos-drain: status update for {} failed: {e}", job.id),
     }
 }

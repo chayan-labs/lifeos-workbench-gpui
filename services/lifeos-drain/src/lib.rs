@@ -71,18 +71,31 @@ pub async fn claim_job(
     }
 }
 
-/// Mark a claimed job done.
-pub async fn complete_job(conn: &Connection, id: &str) -> libsql::Result<()> {
-    conn.execute("UPDATE jobs SET status='done' WHERE id=?1", params![id])
+/// Mark a claimed job done. Guarded by `claimed_by` + `status='running'` so a
+/// worker can only finalize a job it still holds: if this worker stalled, the
+/// reaper requeued the job, and another worker re-claimed it, this stale update
+/// matches zero rows instead of clobbering the new owner's claim (double-run).
+/// Returns the number of rows updated (0 = lease lost).
+pub async fn complete_job(conn: &Connection, id: &str, worker_id: &str) -> libsql::Result<u64> {
+    let n = conn
+        .execute(
+            "UPDATE jobs SET status='done' WHERE id=?1 AND claimed_by=?2 AND status='running'",
+            params![id, worker_id],
+        )
         .await?;
-    Ok(())
+    Ok(n)
 }
 
-/// Mark a claimed job failed (no further retries).
-pub async fn fail_job(conn: &Connection, id: &str) -> libsql::Result<()> {
-    conn.execute("UPDATE jobs SET status='failed' WHERE id=?1", params![id])
+/// Mark a claimed job failed (no further retries). Same lease guard as
+/// `complete_job`. Returns the number of rows updated (0 = lease lost).
+pub async fn fail_job(conn: &Connection, id: &str, worker_id: &str) -> libsql::Result<u64> {
+    let n = conn
+        .execute(
+            "UPDATE jobs SET status='failed' WHERE id=?1 AND claimed_by=?2 AND status='running'",
+            params![id, worker_id],
+        )
         .await?;
-    Ok(())
+    Ok(n)
 }
 
 /// Reap jobs stuck in `running` past the TTL. Those under the attempt cap go
