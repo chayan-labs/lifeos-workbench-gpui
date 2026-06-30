@@ -1,6 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { Database as DbIcon, Share2, Type, ArrowRight, Play, RefreshCw, Plus, CheckCircle } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Database as DbIcon, Share2, Type, ArrowRight, Play, RefreshCw, Plus, CheckCircle, ChevronLeft, ChevronRight } from 'lucide-react';
 import { apiCall } from '../lib/api';
+
+const PAGE_SIZE = 20;
 
 export default function DatabaseView() {
   const [selectedEntity, setSelectedEntity] = useState('trade');
@@ -10,6 +12,36 @@ export default function DatabaseView() {
     { id: 'job_eval_122', kind: 'eval', payload: '{"run_id":"run_49a_sonnet"}', status: 'done', priority: 1 },
     { id: 'job_oauth_019', kind: 'pipeline', payload: '{"sync":"figma_tokens"}', status: 'failed', priority: 3 }
   ]);
+
+  // Live `entities` table browser - GET /api/entity, filtered + paginated.
+  const [liveEntities, setLiveEntities] = useState([]);
+  const [liveState, setLiveState] = useState('loading'); // 'loading' | 'ready' | 'offline'
+  const [liveFilters, setLiveFilters] = useState({ module: '', type: '', status: '' });
+  const [livePage, setLivePage] = useState(0);
+
+  const loadLiveEntities = useCallback(() => {
+    setLiveState('loading');
+    const qs = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(livePage * PAGE_SIZE) });
+    if (liveFilters.module) qs.set('module', liveFilters.module);
+    if (liveFilters.type) qs.set('type', liveFilters.type);
+    if (liveFilters.status) qs.set('status', liveFilters.status);
+    apiCall('GET', `/api/entity?${qs.toString()}`).then(({ ok, data, offline }) => {
+      if (ok && !offline && Array.isArray(data)) {
+        setLiveEntities(data);
+        setLiveState('ready');
+      } else {
+        setLiveEntities([]);
+        setLiveState('offline');
+      }
+    });
+  }, [liveFilters, livePage]);
+
+  useEffect(() => { loadLiveEntities(); }, [loadLiveEntities]);
+
+  const updateLiveFilter = (key, value) => {
+    setLivePage(0);
+    setLiveFilters((prev) => ({ ...prev, [key]: value }));
+  };
 
   const [formError, setFormError] = useState('');
   const [formSuccess, setFormSuccess] = useState('');
@@ -157,6 +189,7 @@ export default function DatabaseView() {
         console.warn('[Database API] Local server offline, saved locally only.');
       } else if (ok) {
         console.log('[Database API] Saved on local server:', data);
+        loadLiveEntities();
       }
     });
 
@@ -360,6 +393,96 @@ export default function DatabaseView() {
           </div>
         </div>
 
+      </div>
+
+      {/* Live Entities Browser (GET /api/entity) */}
+      <div className="neo-surface neo-border-thick neo-shadow p-5 bg-neo-surface">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b-2 border-neo-border pb-4 mb-4">
+          <h3 className="neo-title-md">Live `entities` Browser</h3>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              placeholder="module"
+              value={liveFilters.module}
+              onChange={(e) => updateLiveFilter('module', e.target.value)}
+              className="p-1.5 neo-border bg-neo-surface text-xs font-mono w-24"
+            />
+            <input
+              placeholder="type"
+              value={liveFilters.type}
+              onChange={(e) => updateLiveFilter('type', e.target.value)}
+              className="p-1.5 neo-border bg-neo-surface text-xs font-mono w-24"
+            />
+            <input
+              placeholder="status"
+              value={liveFilters.status}
+              onChange={(e) => updateLiveFilter('status', e.target.value)}
+              className="p-1.5 neo-border bg-neo-surface text-xs font-mono w-24"
+            />
+            <button onClick={loadLiveEntities} className="neo-btn py-1.5 px-2 bg-neo-surface" title="Refresh">
+              <RefreshCw size={14} className={liveState === 'loading' ? 'animate-spin' : ''} />
+            </button>
+          </div>
+        </div>
+
+        {liveState === 'offline' && (
+          <div className="px-3 py-2 bg-neo-red text-white text-xs font-bold neo-border mb-3">
+            Backend unreachable - showing no rows.
+          </div>
+        )}
+        {liveState === 'ready' && liveEntities.length === 0 && (
+          <div className="px-3 py-2 bg-neo-surface-muted text-xs neo-border mb-3">
+            No entities match these filters.
+          </div>
+        )}
+
+        {liveEntities.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b-2 border-neo-border text-left">
+                  <th className="py-2 pr-4 font-mono text-neo-text-muted">id</th>
+                  <th className="py-2 pr-4 font-mono text-neo-text-muted">module</th>
+                  <th className="py-2 pr-4 font-mono text-neo-text-muted">type</th>
+                  <th className="py-2 pr-4 font-mono text-neo-text-muted">status</th>
+                  <th className="py-2 pr-4 font-mono text-neo-text-muted">title</th>
+                </tr>
+              </thead>
+              <tbody>
+                {liveEntities.map((ent) => (
+                  <tr key={ent.id} className="border-b border-neo-border/40">
+                    <td className="py-2 pr-4 font-mono">{ent.id}</td>
+                    <td className="py-2 pr-4">{ent.module}</td>
+                    <td className="py-2 pr-4">{ent.type}</td>
+                    <td className="py-2 pr-4">
+                      <span className="neo-chip py-0.5 text-[9px]">{ent.status}</span>
+                    </td>
+                    <td className="py-2 pr-4 truncate max-w-xs">{ent.title}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between mt-4">
+          <span className="text-xs text-neo-text-muted">Page {livePage + 1}</span>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setLivePage((p) => Math.max(0, p - 1))}
+              disabled={livePage === 0}
+              className="neo-btn py-1 px-2 bg-neo-surface disabled:opacity-40"
+            >
+              <ChevronLeft size={14} />
+            </button>
+            <button
+              onClick={() => setLivePage((p) => p + 1)}
+              disabled={liveEntities.length < PAGE_SIZE}
+              className="neo-btn py-1 px-2 bg-neo-surface disabled:opacity-40"
+            >
+              <ChevronRight size={14} />
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Jobs Queue Section */}
