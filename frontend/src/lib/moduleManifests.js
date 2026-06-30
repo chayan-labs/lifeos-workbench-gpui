@@ -227,12 +227,71 @@ export const SOCIAL_MANIFEST = {
   ],
 };
 
+// Publishing content is outward (it `publishes_to` a Social account), so it
+// stays gated through the same draft.create -> human decision path Social
+// uses (#43) - this manifest declares no publish tool of its own.
+export const MARKETING_MANIFEST = {
+  id: 'marketing',
+  name: 'Marketing',
+  icon: '📣',
+  entityTypes: {
+    campaign: {
+      label: 'Campaign',
+      plural: 'Campaigns',
+      display: { title: 'title', subtitle: (e) => `${e.attrs?.start || '?'} → ${e.attrs?.end || '?'}`, badge: 'status' },
+    },
+    content: {
+      label: 'Content',
+      plural: 'Content',
+      display: { title: 'title', subtitle: (e) => e.attrs?.channel, badge: 'status' },
+    },
+    audience: {
+      label: 'Audience / Segment',
+      plural: 'Audiences',
+      display: { title: 'title' },
+    },
+    lead: {
+      label: 'Lead',
+      plural: 'Leads',
+      display: { title: 'title', subtitle: (e) => e.attrs?.email, badge: 'status' },
+    },
+    channel: {
+      label: 'Channel',
+      plural: 'Channels',
+      display: { title: 'title' },
+    },
+  },
+  views: [
+    { id: 'calendar', label: 'Content Calendar', kind: 'calendar', type: 'content', dateField: 'scheduled_for' },
+    { id: 'campaigns', label: 'Campaigns', kind: 'list', type: 'campaign' },
+    { id: 'leads', label: 'Leads', kind: 'table', type: 'lead', columns: [
+      { key: 'title', label: 'Lead' },
+      { key: 'email', label: 'Email' },
+      { key: 'status', label: 'Status', editable: true },
+    ] },
+    { id: 'funnel', label: 'Funnel', kind: 'metric', metric: 'campaign_funnel' },
+  ],
+  metrics: [
+    {
+      id: 'campaign_funnel',
+      source: 'events',
+      viz: 'funnel',
+      stages: [
+        { label: 'Drafted', where: { type: 'content.drafted' } },
+        { label: 'Sent', where: { type: 'content.sent' } },
+        { label: 'Campaign launched', where: { type: 'campaign.launched' } },
+      ],
+    },
+  ],
+};
+
 export const MODULE_MANIFESTS = {
   learning: LEARNING_MANIFEST,
   tasks: TASKS_MANIFEST,
   coding: CODING_MANIFEST,
   trading: TRADING_MANIFEST,
   social: SOCIAL_MANIFEST,
+  marketing: MARKETING_MANIFEST,
 };
 
 export function getManifest(id) {

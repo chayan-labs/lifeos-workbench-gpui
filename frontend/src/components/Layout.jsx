@@ -109,6 +109,7 @@ export default function Layout({ children, onLogout }) {
         { name: 'Coding', href: '/m/coding', icon: FolderGit2 },
         { name: 'Trading', href: '/m/trading', icon: Gauge },
         { name: 'Social', href: '/m/social', icon: Sparkles },
+        { name: 'Marketing', href: '/m/marketing', icon: LayoutDashboard },
         { name: 'Modules', href: '/modules', icon: Cpu },
         { name: 'Database', href: '/database', icon: Database },
         { name: 'Graph', href: '/graph', icon: GitBranch },
