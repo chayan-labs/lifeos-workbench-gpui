@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
 
@@ -46,8 +47,13 @@ export default function MarkdownRenderer({ content, className = '' }) {
   useEffect(() => {
     let source = Array.isArray(content) ? content.join('\n\n') : String(content || '');
     const parsed = marked.parse(source);
-    // Open links in new tab
-    const finalHtml = parsed.replace(/<a /g, '<a target="_blank" rel="noopener" ');
+    // Open links in new tab.
+    const withTargets = parsed.replace(/<a /g, '<a target="_blank" rel="noopener" ');
+    // Sanitize before injecting: this content is AI- and user-authored (notes,
+    // summaries, annotation answers, console plans), so unsanitized HTML through
+    // dangerouslySetInnerHTML is a stored-XSS vector. DOMPurify strips scripts
+    // and event handlers while preserving KaTeX's span markup and our links.
+    const finalHtml = DOMPurify.sanitize(withTargets, { ADD_ATTR: ['target'] });
     setHtml(finalHtml);
   }, [content]);
 
