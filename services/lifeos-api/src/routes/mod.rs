@@ -10,6 +10,7 @@ mod module_request;
 mod planned;
 mod register;
 mod edge;
+mod search;
 
 use crate::state::AppState;
 use axum::{
@@ -34,6 +35,8 @@ pub fn router(state: AppState) -> Router {
         // --- job queue (read for the UI, enqueue for producers) ---
         .route("/api/jobs", get(job::list))
         .route("/api/job", post(job::create))
+        // --- hybrid recall: FTS5 (+ best-effort vectors) over the derived DB ---
+        .route("/api/search", get(search::search))
         // --- dashboards: pure SQL aggregation over events ---
         .route("/api/metrics", get(metrics::metrics))
         // --- self-extension intake ---

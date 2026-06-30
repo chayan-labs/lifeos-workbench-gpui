@@ -11,6 +11,9 @@ use std::time::Duration;
 /// (`services/lifeos-api/src/db.rs` -> repo-root `migrations/`).
 const MIGRATION_CORE: &str = include_str!("../../../migrations/0001_core.sql");
 const MIGRATION_CONTROL: &str = include_str!("../../../migrations/0002_control_plane.sql");
+/// Applied to the attached derived schema `d` (FTS5 lexical index). Separate
+/// from core/control because the derived DB is never synced and is rebuildable.
+const MIGRATION_DERIVED: &str = include_str!("../../../migrations/0003_derived.sql");
 
 /// The canonical DB plus its live connection. `database` is retained by the caller
 /// so the embedded-replica's background replicator stays alive (dropping it would
@@ -57,7 +60,14 @@ pub async fn connect(config: &Config) -> Result<Db, libsql::Error> {
     let conn = database.connect()?;
     run_migrations(&conn).await?;
     seed(&conn).await?;
+    // Create the derived schema in its own file FIRST (triggers/FTS DDL can't be
+    // schema-qualified through an ATTACH alias), then attach it for querying.
+    bootstrap_derived(&config.derived_db_path).await?;
     attach_derived(&conn, &config.derived_db_path).await?;
+    // Build the lexical index from the canonical DB so search works at boot.
+    if let Err(e) = rebuild_derived_index(&conn).await {
+        tracing::warn!("initial derived index rebuild failed (search degraded): {e}");
+    }
 
     Ok(Db { database, conn })
 }
@@ -71,6 +81,49 @@ pub async fn attach_derived(conn: &Connection, derived_path: &str) -> Result<(),
     conn.execute(&format!("ATTACH DATABASE 'file:{derived_path}' AS d"), ())
         .await?;
     tracing::info!("attached derived DB '{derived_path}' as schema 'd' (never synced)");
+    Ok(())
+}
+
+/// Create the derived FTS5 schema by opening the derived file directly (DDL with
+/// triggers can't be created through an ATTACH alias). Idempotent. The semantic
+/// `entity_vec` table is created by server/memvec.py, not here (vec0 is not
+/// loadable from the Rust libSQL build).
+pub async fn bootstrap_derived(derived_path: &str) -> Result<(), libsql::Error> {
+    let db = Builder::new_local(derived_path).build().await?;
+    let conn = db.connect()?;
+    conn.execute_batch(MIGRATION_DERIVED).await?;
+    tracing::info!("derived FTS5 schema bootstrapped in '{derived_path}'");
+    Ok(())
+}
+
+/// Rebuild the lexical index from the canonical entities table. Cheap full
+/// rebuild; the derived DB is disposable by design (DATA-MODEL §6).
+pub async fn rebuild_derived_index(conn: &Connection) -> Result<(), libsql::Error> {
+    conn.execute("DELETE FROM d.entities_idx", ()).await?;
+    conn.execute(
+        "INSERT INTO d.entities_idx (id, workspace_id, module, type, title, status, attrs, updated_at) \
+         SELECT id, workspace_id, module, type, title, status, attrs, updated_at FROM main.entities",
+        (),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Best-effort incremental upsert of one entity into the lexical index. Called
+/// after entity create/update so search stays live without a full rebuild.
+/// Errors are non-fatal: the boot rebuild reconciles any drift.
+pub async fn index_entity(conn: &Connection, id: &str) -> Result<(), libsql::Error> {
+    conn.execute(
+        "INSERT INTO d.entities_idx (id, workspace_id, module, type, title, status, attrs, updated_at) \
+         SELECT id, workspace_id, module, type, title, status, attrs, updated_at \
+         FROM main.entities WHERE id = ?1 \
+         ON CONFLICT(id) DO UPDATE SET \
+            workspace_id=excluded.workspace_id, module=excluded.module, type=excluded.type, \
+            title=excluded.title, status=excluded.status, attrs=excluded.attrs, \
+            updated_at=excluded.updated_at",
+        libsql::params![id],
+    )
+    .await?;
     Ok(())
 }
 

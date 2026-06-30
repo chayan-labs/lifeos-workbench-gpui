@@ -2,7 +2,7 @@
 //! Every operation is workspace-scoped (RLS-style) at this layer.
 
 use crate::audit::emit;
-use crate::db::workspace_exists;
+use crate::db::{index_entity, workspace_exists};
 use crate::error::{ApiError, ApiResult};
 use crate::ids::{new_id, now_secs};
 use crate::models::{collect, read_entity, Entity, COLS_ENTITY};
@@ -83,6 +83,10 @@ pub async fn create(
         .await?;
 
     emit(&state.conn, &workspace_id, "entity.created", Some(&id), "api", &json!({})).await?;
+    // Keep the lexical search index live (best-effort; boot rebuild reconciles).
+    if let Err(e) = index_entity(&state.conn, &id).await {
+        tracing::warn!("derived index upsert failed for {id}: {e}");
+    }
     fetch_one(&state, &workspace_id, &id).await
 }
 
@@ -191,6 +195,9 @@ pub async fn update(
         .await?;
 
     emit(&state.conn, &workspace_id, "entity.updated", Some(&id), "api", &json!({})).await?;
+    if let Err(e) = index_entity(&state.conn, &id).await {
+        tracing::warn!("derived index upsert failed for {id}: {e}");
+    }
     fetch_one(&state, &workspace_id, &id).await
 }
 
