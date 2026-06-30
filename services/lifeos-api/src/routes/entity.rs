@@ -82,7 +82,17 @@ pub async fn create(
         )
         .await?;
 
-    emit(&state.conn, &workspace_id, "entity.created", Some(&id), "api", &json!({})).await?;
+    // attrs is snapshotted on the event so a forced sync conflict can be
+    // repaired by replaying events in causal (id/ULID) order - see reconcile.rs.
+    emit(
+        &state.conn,
+        &workspace_id,
+        "entity.created",
+        Some(&id),
+        "api",
+        &json!({ "attrs": req.attrs }),
+    )
+    .await?;
     // Keep the lexical search index live (best-effort; boot rebuild reconciles).
     if let Err(e) = index_entity(&state.conn, &id).await {
         tracing::warn!("derived index upsert failed for {id}: {e}");
@@ -194,7 +204,35 @@ pub async fn update(
         )
         .await?;
 
-    emit(&state.conn, &workspace_id, "entity.updated", Some(&id), "api", &json!({})).await?;
+    // Snapshot the attrs blob that was actually applied (or {} if this update
+    // didn't touch attrs) so reconcile.rs can replay the full causal history.
+    emit(
+        &state.conn,
+        &workspace_id,
+        "entity.updated",
+        Some(&id),
+        "api",
+        &json!({ "attrs": req.attrs }),
+    )
+    .await?;
+    if let Err(e) = index_entity(&state.conn, &id).await {
+        tracing::warn!("derived index upsert failed for {id}: {e}");
+    }
+    fetch_one(&state, &workspace_id, &id).await
+}
+
+/// Repair `attrs` from a forced sync conflict by replaying the entity's
+/// `entity.created`/`entity.updated` events in causal order - see
+/// `crate::reconcile`. No-op if the event log has nothing to replay.
+pub async fn reconcile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Entity>> {
+    let workspace_id = resolve_workspace(&headers, &state.config.jwt_secret, None);
+    // Ensure it exists in this tenant before mutating.
+    let _ = fetch_one(&state, &workspace_id, &id).await?;
+    crate::reconcile::reconcile_entity(&state.conn, &workspace_id, &id).await?;
     if let Err(e) = index_entity(&state.conn, &id).await {
         tracing::warn!("derived index upsert failed for {id}: {e}");
     }

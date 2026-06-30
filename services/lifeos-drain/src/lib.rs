@@ -114,12 +114,20 @@ pub enum Dispatch {
 /// Route a job to its handler by kind. Real handlers (ingest/pipeline/
 /// module_build/eval) land in later phases; until then known kinds are
 /// acknowledged as no-op stubs and unknown kinds are rejected.
+///
+/// `reconcile` (docs/DATA-MODEL.md §4.2) already has a real handler -
+/// `lifeos_api::reconcile::reconcile_entity`, reachable today via
+/// `POST /api/entity/:id/reconcile`. It is dispatched here as a stub too so a
+/// queued `jobs` row of this kind is acknowledged rather than rejected as
+/// Unknown; wiring drain to actually call the API is a later phase, same as
+/// the other stub kinds.
 pub fn dispatch(kind: &str) -> Dispatch {
     match kind {
         "ingest" => Dispatch::Stub("lifeos-ingest"),
         "pipeline" => Dispatch::Stub("lifeos-pipelines"),
         "module_build" => Dispatch::Stub("scaffold.js"),
         "eval" => Dispatch::Stub("harness eval"),
+        "reconcile" => Dispatch::Stub("lifeos-api reconcile"),
         _ => Dispatch::Unknown,
     }
 }

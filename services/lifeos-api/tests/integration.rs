@@ -342,3 +342,67 @@ async fn unknown_workspace_is_rejected() {
     assert_eq!(st, StatusCode::BAD_REQUEST);
     assert!(body["error"].as_str().unwrap().contains("workspace"));
 }
+
+/// docs/DATA-MODEL.md §4.2: sync is last-push-wins over the whole `attrs`
+/// blob, not LWW on `updated_at`. Force a row-level conflict (two divergent
+/// writers patching the same entity) and confirm POST .../reconcile repairs
+/// the row from the append-only `events` log.
+#[tokio::test]
+async fn reconcile_replays_events_after_forced_conflict() {
+    let app = test_app().await;
+    let (_, ent) = send(
+        &app.router,
+        "POST",
+        "/api/entity",
+        Some(json!({"module": "tasks", "type": "task", "attrs": {}})),
+    )
+    .await;
+    let id = ent["id"].as_str().unwrap();
+
+    // Two divergent writers (bot lane, Mac lane) each PATCH attrs - both
+    // events land in the log, conflict-free.
+    let (_, after_bot) = send(
+        &app.router,
+        "PATCH",
+        &format!("/api/entity/{id}"),
+        Some(json!({"attrs": {"status": "todo"}})),
+    )
+    .await;
+    assert_eq!(after_bot["attrs"]["status"], "todo");
+
+    let (_, after_mac) = send(
+        &app.router,
+        "PATCH",
+        &format!("/api/entity/{id}"),
+        Some(json!({"attrs": {"status": "done"}})),
+    )
+    .await;
+    assert_eq!(after_mac["attrs"]["status"], "done");
+
+    // Force the conflict the way it actually happens: an out-of-band Turso
+    // sync pull overwrites the row directly (no API call, no new event) with
+    // a stale push - the bot's older write - landing after the Mac's,
+    // because last-push-wins cares about sync arrival order, not causal
+    // order. Simulate that with a raw connection to the same file, bypassing
+    // the handler/event-emit path entirely.
+    let raw = libsql::Builder::new_local(&app.db_path).build().await.unwrap();
+    let raw_conn = raw.connect().unwrap();
+    raw_conn
+        .execute(
+            "UPDATE entities SET attrs = '{\"status\":\"todo\"}' WHERE id = ?1",
+            libsql::params![id],
+        )
+        .await
+        .unwrap();
+    let (_, forced) = send(&app.router, "GET", &format!("/api/entity/{id}"), None).await;
+    assert_eq!(forced["attrs"]["status"], "todo");
+
+    // Reconcile replays events in causal order; the last attrs-bearing event
+    // wins, restoring "done" - the intended final state.
+    let (st, reconciled) = send(&app.router, "POST", &format!("/api/entity/{id}/reconcile"), None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(reconciled["attrs"]["status"], "done");
+
+    let (_, fetched) = send(&app.router, "GET", &format!("/api/entity/{id}"), None).await;
+    assert_eq!(fetched["attrs"]["status"], "done");
+}

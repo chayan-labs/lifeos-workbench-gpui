@@ -26,6 +26,8 @@ pub fn router(state: AppState) -> Router {
         // --- generic entity CRUD (the spine the whole system rests on) ---
         .route("/api/entity", post(entity::create).get(entity::list))
         .route("/api/entity/:id", get(entity::get_one).patch(entity::update))
+        // --- repair a forced sync conflict by replaying events (docs/DATA-MODEL.md §4.2) ---
+        .route("/api/entity/:id/reconcile", post(entity::reconcile))
         // --- graph edges ---
         .route("/api/edge", post(edge::create).get(edge::list))
         .route("/api/edge/:id", patch(edge::update))

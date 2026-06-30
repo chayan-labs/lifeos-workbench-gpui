@@ -9,6 +9,7 @@ pub mod db;
 pub mod error;
 pub mod ids;
 pub mod models;
+pub mod reconcile;
 pub mod routes;
 pub mod state;
 
