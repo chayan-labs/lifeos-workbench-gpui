@@ -9,7 +9,7 @@ import { executeAction } from '../lib/agentActions';
 // reuse is deferred until lifeos-vcs ships (later epic) - this renders a
 // plain JSON before/after diff in the meantime, which is the same
 // information a semantic-diff widget would otherwise wrap.
-export default function ActionPlanPreview({ plan, onDone }) {
+export default function ActionPlanPreview({ plan, onDone, planId }) {
   const [befores, setBefores] = useState({});
   const [results, setResults] = useState({});
 
@@ -26,7 +26,7 @@ export default function ActionPlanPreview({ plan, onDone }) {
   }, [plan]);
 
   const runStep = async (step, i, approved) => {
-    const result = await executeAction({ tool: step.tool, args: step.args }, { approved });
+    const result = await executeAction({ tool: step.tool, args: step.args }, { approved, planId });
     setResults((prev) => ({ ...prev, [i]: result }));
   };
 

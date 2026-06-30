@@ -25,7 +25,8 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   GitBranch,
-  Sparkles
+  Sparkles,
+  History
 } from 'lucide-react';
 
 export default function Layout({ children, onLogout }) {
@@ -122,6 +123,7 @@ export default function Layout({ children, onLogout }) {
       items: [
         { name: 'Integrations', href: '/integrations', icon: Settings },
         { name: 'Docs', href: '/docs', icon: FileText },
+        { name: 'Agent Ledger', href: '/agent-ledger', icon: History },
       ],
     },
     // Hot-installed modules (issue #29): appear here the instant the SSE

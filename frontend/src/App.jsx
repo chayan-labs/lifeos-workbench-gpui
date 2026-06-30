@@ -15,6 +15,7 @@ import RefineDemo from './pages/RefineDemo';
 import GraphView from './pages/GraphView';
 import InstalledModulePage from './pages/InstalledModulePage';
 import ModuleDashboards from './pages/ModuleDashboards';
+import AgentLedger from './pages/AgentLedger';
 
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(
@@ -134,6 +135,14 @@ export default function App() {
           element={
             <Layout onLogout={handleLogout}>
               <Profile />
+            </Layout>
+          }
+        />
+        <Route
+          path="/agent-ledger"
+          element={
+            <Layout onLogout={handleLogout}>
+              <AgentLedger />
             </Layout>
           }
         />

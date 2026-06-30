@@ -28,6 +28,7 @@ export default function AIConsole() {
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState(null); // proposed change awaiting human commit
   const [actionPlan, setActionPlan] = useState(null); // compiled ActionPlan awaiting preview
+  const [planId, setPlanId] = useState(null); // groups this plan's applied actions for atomic undo
   const [compiling, setCompiling] = useState(false);
   const endRef = useRef(null);
 
@@ -100,6 +101,7 @@ export default function AIConsole() {
     setCompiling(true);
     const { plan } = await compileActionPlan(pending.text, pending.scope);
     setActionPlan(plan);
+    setPlanId(`plan_${crypto.randomUUID()}`);
     setCompiling(false);
   };
 
@@ -164,7 +166,7 @@ export default function AIConsole() {
             {actionPlan && (
               <div className="p-2.5 neo-border bg-neo-surface-muted">
                 <div className="neo-label-sm mb-2">Compiled Action Plan</div>
-                <ActionPlanPreview plan={actionPlan} onDone={() => setActionPlan(null)} />
+                <ActionPlanPreview plan={actionPlan} planId={planId} onDone={() => { setActionPlan(null); setPlanId(null); }} />
               </div>
             )}
             <div ref={endRef} />

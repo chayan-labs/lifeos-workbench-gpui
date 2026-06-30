@@ -102,12 +102,47 @@ async function logDenied(tool, args) {
   });
 }
 
-async function logApplied(tool, args, result) {
+// Computes the reverse action for a tool, given the args that were applied
+// (plus a captured "before" state on `args.__before` for entity.update) and
+// the run() result. Returns null when the tool genuinely has no inverse in
+// the closed ACTION_TOOLS registry - reported honestly, never fabricated.
+function computeReverse(tool, args, result) {
+  if (tool === 'entity.update') {
+    if (!args.__before) return null;
+    const reversePatch = {};
+    for (const key of Object.keys(args.patch || {})) {
+      reversePatch[key] = args.__before[key] ?? null;
+    }
+    return { tool: 'entity.update', args: { id: args.id, patch: reversePatch } };
+  }
+  if (tool === 'entity.create' || tool === 'draft.create') {
+    const id = result?.data?.id;
+    if (!id) return null;
+    // No hard-delete exists anywhere (entities are lifecycle-managed) - the
+    // honest reverse of a create is a soft-revert via status, not a delete.
+    return { tool: 'entity.update', args: { id, patch: { status: 'undone' } } };
+  }
+  // edge.create has no edge.update/edge.delete tool in the closed registry;
+  // view.configure/dashboard.arrange/navigate/search/module.requestBuild/
+  // pipeline.run have no safe generic inverse either - honestly non-reversible.
+  return null;
+}
+
+async function logApplied(tool, args, result, reverseAction, planId) {
   await apiCall('POST', '/api/event', {
     type: 'action.applied',
     actor: 'agent',
     entity_id: result?.data?.id,
-    attrs: { tool, args },
+    attrs: { tool, args, reverse_action: reverseAction, plan_id: planId || null },
+  });
+}
+
+async function logUndone(originalEventId, tool, args, result) {
+  await apiCall('POST', '/api/event', {
+    type: 'action.undone',
+    actor: 'agent',
+    entity_id: result?.data?.id,
+    attrs: { tool, args, undoes_event_id: originalEventId },
   });
 }
 
@@ -115,7 +150,9 @@ async function logApplied(tool, args, result) {
 // { status: 'forbidden' | 'pending_approval' | 'applied' | 'failed', ... }
 // - never executes a gated tool without explicit `approved: true`, and never
 // even looks up a protected tool name beyond classifying it as forbidden.
-export async function executeAction({ tool, args }, { approved = false } = {}) {
+// `planId` groups multi-step ActionPlan applications so a whole batch can be
+// undone atomically later (issue #36).
+export async function executeAction({ tool, args }, { approved = false, planId = null } = {}) {
   const classification = classifyAction(tool);
 
   if (classification === 'forbidden') {
@@ -127,10 +164,46 @@ export async function executeAction({ tool, args }, { approved = false } = {}) {
     return { status: 'pending_approval', tool, reason: `'${tool}' is gated - outward/irreversible actions require human approval before they run.` };
   }
 
+  // Capture "before" state for entity.update so the reverse patch reflects
+  // real prior values, not a guess.
+  let before = null;
+  if (tool === 'entity.update' && args?.id) {
+    const { ok, data } = await apiCall('GET', `/api/entity/${args.id}`);
+    if (ok) before = data;
+  }
+
   const result = await ACTION_TOOLS[tool].run(args);
   if (!result.ok) {
     return { status: 'failed', tool, error: result.error };
   }
-  await logApplied(tool, args, result);
-  return { status: 'applied', tool, data: result.data };
+  const reverseAction = computeReverse(tool, { ...args, __before: before }, result);
+  await logApplied(tool, args, result, reverseAction, planId);
+  return { status: 'applied', tool, data: result.data, reverseAction };
+}
+
+// Re-invokes an applied event's stored reverse action as a NEW forward
+// action - history is never rewritten; undo is itself an `action.undone`
+// event referencing the original (docs/AGENT-CONTROL.md). Always pre-
+// approved: the reverse action was already vetted when its forward
+// counterpart was classified and applied.
+export async function undoAction(appliedEvent) {
+  const reverseAction = appliedEvent.attrs?.reverse_action;
+  if (!reverseAction) {
+    return { status: 'not_reversible', reason: 'This action has no stored reverse - it was either non-reversible by design or applied before undo support existed.' };
+  }
+  const result = await ACTION_TOOLS[reverseAction.tool].run(reverseAction.args);
+  if (!result.ok) return { status: 'failed', error: result.error };
+  await logUndone(appliedEvent.id, reverseAction.tool, reverseAction.args, result);
+  return { status: 'undone', data: result.data };
+}
+
+// Undoes every action in a plan atomically in reverse order (last-applied,
+// first-undone) so partial dependencies between steps unwind safely.
+export async function undoPlan(appliedEvents) {
+  const ordered = [...appliedEvents].sort((a, b) => b.ts - a.ts);
+  const results = [];
+  for (const ev of ordered) {
+    results.push({ event: ev, result: await undoAction(ev) });
+  }
+  return results;
 }
