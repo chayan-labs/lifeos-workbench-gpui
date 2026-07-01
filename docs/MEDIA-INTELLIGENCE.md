@@ -48,15 +48,26 @@ and `Embedder::embed` fires per segment (a `SubprocessEmbedder` shelling out to
 docs/MANUAL-SETUP.md §88). The parent entity's `attrs.transcript_ref` rollup (§5 below) is set
 to a fresh `lifeos_vcs::store_blob` of the full extracted text.
 
-Audio/video (**#89**, Whisper-class transcription) and image/PDF/docx (**#90**, vision-LLM
-captioning / OCR / pdfium text extraction) remain honest stubs: `route_by_mime` returns
-`Unsupported{kind, blocked_by}` naming the exact blocking issue - the same `blocked_by` strings
-`lifeos_vcs::diff::blocking_issue_for` already uses for those MIME classes (#85/#87), so a
-committed audio file reports the identical "blocked by #89" reasoning whether you ask
-`/api/vcs/diff` or `/api/ingest`. No segments are created for an unsupported kind; the parent
-entity's `attrs.ingest_status="unsupported"` + `attrs.ingest_blocked_by` record why, and an
-`ingest.unsupported` event is emitted - the job still completes (nothing to retry until #89/#90
-land), it just honestly produces zero segments rather than fabricating any.
+**Implemented (issue #89):** audio (`.mp3/.wav/.m4a`) transcription is real. `services/
+lifeos-ingest/src/audio.rs::decode_to_16k_mono_f32` decodes any symphonia-supported container
+to 16kHz mono f32 PCM (pure Rust, no ffmpeg); a `Transcriber` trait (DI, same shape as
+`Embedder`) runs it through `whisper-rs` (`WhisperTranscriber`, CPU-bound inference on
+`spawn_blocking`) against a local GGML model (`LIFEOS_WHISPER_MODEL`, see
+docs/MANUAL-SETUP.md §89). Each returned span becomes a `type=segment` child entity with real
+`attrs.t_start`/`attrs.t_end` (seconds) - the locator fields plain text (#88) had no value for -
+plus `attrs.text`, embedded the same way plain-text segments are. When `LIFEOS_WHISPER_MODEL`
+is unset, `lifeos-drain` uses a `NoopTranscriber` that fails the job loudly rather than
+silently producing zero segments - a missing transcriber for a MIME class the router says it
+can handle is a real capability gap, not an honest "still stubbed" state.
+
+Video containers (`.mov/.webm/.mp4` - no general video-container demuxer here) and image/PDF/
+docx (**#90**, vision-LLM captioning / OCR / pdfium text extraction) remain honest stubs:
+`route_by_mime` returns `Unsupported{kind, blocked_by}` naming the exact gap - never a silent
+no-op. No segments are created for an unsupported kind; the parent entity's
+`attrs.ingest_status="unsupported"` + `attrs.ingest_blocked_by` record why, and an
+`ingest.unsupported` event is emitted - the job still completes (nothing to retry until #90
+lands for images/PDF or a video-container demuxer exists), it just honestly produces zero
+segments rather than fabricating any.
 
 ---
 

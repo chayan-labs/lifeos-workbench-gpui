@@ -15,7 +15,9 @@
 //! LIFEOS_MEMVEC (optional path to `server/memvec.py` - without it, ingest
 //! still creates segments, just without semantic embedding),
 //! LIFEOS_DERIVED_DB_PATH (default `lifeos-derived.db`, only used when
-//! LIFEOS_MEMVEC is set).
+//! LIFEOS_MEMVEC is set), LIFEOS_WHISPER_MODEL (optional path to a GGML
+//! whisper.cpp model, e.g. ggml-tiny.en.bin - without it, audio ingest jobs
+//! fail loudly rather than silently producing zero segments, see #89).
 
 use libsql::Builder;
 use lifeos_drain::{
@@ -23,7 +25,7 @@ use lifeos_drain::{
     run_module_build, Dispatch, DrainConfig, NoopNotifier, Notifier, ScaffoldJsBuilder,
     TelegramNotifier,
 };
-use lifeos_ingest::{Embedder, IngestJobPayload, NoopEmbedder, SubprocessEmbedder};
+use lifeos_ingest::{Embedder, IngestJobPayload, NoopEmbedder, NoopTranscriber, SubprocessEmbedder, Transcriber, WhisperTranscriber};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 
@@ -88,9 +90,17 @@ async fn main() {
         }
     };
 
+    let transcriber: Box<dyn Transcriber> = match std::env::var("LIFEOS_WHISPER_MODEL") {
+        Ok(model_path) if !model_path.is_empty() => Box::new(WhisperTranscriber { model_path }),
+        _ => {
+            println!("lifeos-drain: LIFEOS_WHISPER_MODEL not set, audio ingest jobs will fail loudly");
+            Box::new(NoopTranscriber)
+        }
+    };
+
     loop {
         match claim_job(&conn, &worker_id, now_secs(), cfg).await {
-            Ok(Some(job)) => run_job(&conn, &job, &worker_id, &vcs_store, embedder.as_ref()).await,
+            Ok(Some(job)) => run_job(&conn, &job, &worker_id, &vcs_store, embedder.as_ref(), transcriber.as_ref()).await,
             Ok(None) => {}
             Err(e) => eprintln!("lifeos-drain: claim failed: {e}"),
         }
@@ -117,6 +127,7 @@ async fn run_job(
     worker_id: &str,
     vcs_store: &lifeos_vcs::ObjectStore,
     embedder: &dyn Embedder,
+    transcriber: &dyn Transcriber,
 ) {
     println!("lifeos-drain: claimed {} (kind={})", job.id, job.kind);
     let result = match dispatch(&job.kind) {
@@ -126,8 +137,16 @@ async fn run_job(
         }
         Dispatch::Ingest => {
             let payload: IngestJobPayload = serde_json::from_str(&job.payload).unwrap_or_default();
-            match lifeos_ingest::process_ingest_job(conn, vcs_store, embedder, &job.workspace_id, payload, now_secs())
-                .await
+            match lifeos_ingest::process_ingest_job(
+                conn,
+                vcs_store,
+                embedder,
+                transcriber,
+                &job.workspace_id,
+                payload,
+                now_secs(),
+            )
+            .await
             {
                 Ok(outcome) => {
                     println!("lifeos-drain: {} ingest -> {outcome:?}", job.id);

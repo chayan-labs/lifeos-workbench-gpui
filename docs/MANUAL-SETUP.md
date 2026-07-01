@@ -416,10 +416,46 @@ export LIFEOS_DERIVED_DB_PATH="/path/to/life-os/lifeos-derived.db"
 blob CAS root, default `lifeos-blobs`) must point at the same directory `lifeos-api` writes
 committed file bytes into, so `lifeos-drain` can read the blob it's ingesting.
 
-Audio/video transcription (#89) and image/PDF/docx captioning/OCR/text-extraction (#90) are
-still honest stubs: `lifeos-ingest` names the blocking issue on the parent entity's
-`attrs.ingest_blocked_by` rather than pretending to extract anything. One true end-to-end
-check once `LIFEOS_MEMVEC` is set: commit a `.txt` file via `POST /api/vcs/commit`, enqueue
-`POST /api/ingest {"entity_id": "<the file's id>"}`, run `lifeos-drain`, confirm `segment`
-child entities appear via `GET /api/entity?type=segment` and a `memvec.py query` for a phrase
-from the file returns one of them.
+Audio transcription is real now (#89, below). Video containers and image/PDF/docx captioning/
+OCR/text-extraction (#90) are still honest stubs: `lifeos-ingest` names the blocking gap on the
+parent entity's `attrs.ingest_blocked_by` rather than pretending to extract anything. One true
+end-to-end check once `LIFEOS_MEMVEC` is set: commit a `.txt` file via `POST /api/vcs/commit`,
+enqueue `POST /api/ingest {"entity_id": "<the file's id>"}`, run `lifeos-drain`, confirm
+`segment` child entities appear via `GET /api/entity?type=segment` and a `memvec.py query` for
+a phrase from the file returns one of them.
+
+### #89 - `lifeos-drain` env for real audio transcription (`LIFEOS_WHISPER_MODEL`)
+
+`services/lifeos-ingest` transcribes `.mp3/.wav/.m4a` for real now via `whisper-rs` (whisper.cpp
+bindings, built from source via the `cmake` crate - **requires `cmake` + a C++ toolchain**
+installed on the Mac, e.g. `nix-shell -p cmake` if not already on PATH) and `symphonia` (pure
+Rust audio decode, no ffmpeg). One env var, read in `services/lifeos-drain/src/main.rs`:
+
+```sh
+# Path to a local GGML whisper.cpp model. Without this set, lifeos-drain uses
+# a NoopTranscriber that fails audio ingest jobs loudly (not silently) -
+# route_by_mime says it CAN handle this MIME class, so a missing model is a
+# real gap, unlike the honest Unsupported{} stub for video/image/PDF/docx.
+export LIFEOS_WHISPER_MODEL="/path/to/life-os/services/.whisper-models/ggml-tiny.en.bin"
+```
+
+Download a model (tiny.en ≈ 75 MiB, English-only, fastest - swap for `ggml-base.en.bin` for
+better accuracy at ~142 MiB):
+
+```sh
+mkdir -p services/.whisper-models
+curl -L -o services/.whisper-models/ggml-tiny.en.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin
+```
+
+Model files are **not committed to git** (matches the project's blob-storage `.gitignore`
+discipline) - each machine running `lifeos-drain` for real audio ingest downloads its own copy
+once. The automated test suite never downloads a model or runs real inference (`MockTranscriber`
+stands in, same "heavy external dependency mocked in tests" boundary as `ScaffoldJsBuilder`/
+`SubprocessEmbedder`/`TelegramNotifier`) - this was verified live once during #89's
+implementation (see the issue's closing comment for the actual transcript + timestamp produced
+against a real model). One true end-to-end check any time after: commit a short `.wav`/`.mp3`
+via `POST /api/vcs/commit`, enqueue `POST /api/ingest {"entity_id": "<the file's id>"}`, run
+`lifeos-drain` with `LIFEOS_WHISPER_MODEL` set, confirm `segment` child entities appear via
+`GET /api/entity?type=segment` with real `attrs.t_start`/`attrs.t_end`/`attrs.text` matching
+what's actually said in the clip.

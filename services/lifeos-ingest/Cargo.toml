@@ -11,6 +11,9 @@ libsql = { version = "0.6.0", default-features = false, features = ["remote", "h
 lifeos-vcs = { path = "../lifeos-vcs" }
 ulid = "1.1"
 async-trait = "0.1"
+symphonia = { version = "=0.5.5", features = ["wav", "mp3", "aac", "isomp4"] }
+whisper-rs = "0.16"
 
 [dev-dependencies]
 tempfile = "3.27"
+hound = "3.5"

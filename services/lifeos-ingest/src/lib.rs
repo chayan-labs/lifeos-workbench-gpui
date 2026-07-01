@@ -8,18 +8,23 @@
 //! `lifeos_api::audit::emit`.
 //!
 //! Scope of #88 is the orchestrator, not the extractors: MIME routing, job
-//! dispatch, segment-entity creation, and triggering memvec indexing. Real
-//! extraction lands only for plain text here - audio/video transcription
-//! (#89) and image/PDF/docx captioning/OCR/text-extraction (#90) are honestly
+//! dispatch, segment-entity creation, and triggering memvec indexing. #89
+//! added real transcription for `.mp3/.wav/.m4a` via `symphonia` (decode) +
+//! `whisper-rs` (transcribe) - see `audio::decode_to_16k_mono_f32` and
+//! `WhisperTranscriber`. Video containers (`.mov/.webm/.mp4`) and
+//! image/PDF/docx captioning/OCR/text-extraction (#90) are still honestly
 //! reported as `Unsupported { kind, blocked_by }`, matching the same
 //! `blocked_by` issue numbers `lifeos_vcs::diff::blocking_issue_for` already
-//! uses for those same MIME classes.
+//! uses for those MIME classes.
 
 use async_trait::async_trait;
 use libsql::{params, Connection};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::fmt;
+
+pub mod audio;
+pub use audio::AudioError;
 use std::sync::Mutex;
 use ulid::{Generator, Ulid};
 
@@ -65,11 +70,13 @@ pub struct IngestJobPayload {
     pub blob_ref: Option<String>,
 }
 
-/// MIME routing decision. Only `PlainText` has a real extractor today; every
+/// MIME routing decision. `PlainText`/`Audio` have real extractors; every
 /// other kind is a named, honest gap - never a silent no-op.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MimeRoute {
     PlainText,
+    /// `.mp3/.wav/.m4a` - symphonia can demux+decode all three (issue #89).
+    Audio,
     Unsupported { kind: &'static str, blocked_by: &'static str },
 }
 
@@ -82,15 +89,19 @@ pub fn route_by_mime(name: &str, hint_kind: Option<&str>) -> MimeRoute {
     const AUDIO_EXT: &[&str] = &[".mp3", ".wav", ".m4a"];
     const VIDEO_EXT: &[&str] = &[".mp4", ".mov", ".webm"];
     const IMAGE_EXT: &[&str] = &[".png", ".jpg", ".jpeg", ".gif", ".webp"];
+    // symphonia has no general video-container demuxer here - out of #89's
+    // scope (audio transcription only). Not #89 anymore since #89 is closed
+    // by the time this ships; name the real remaining gap instead.
+    const VIDEO_GAP: &str = "lifeos-ingest video container support (no symphonia demuxer for mov/webm/mp4-video yet)";
 
     if TEXT_EXT.iter().any(|ext| lower.ends_with(ext)) {
         return MimeRoute::PlainText;
     }
     if AUDIO_EXT.iter().any(|ext| lower.ends_with(ext)) {
-        return MimeRoute::Unsupported { kind: "audio", blocked_by: "lifeos-ingest transcription (#89)" };
+        return MimeRoute::Audio;
     }
     if VIDEO_EXT.iter().any(|ext| lower.ends_with(ext)) {
-        return MimeRoute::Unsupported { kind: "video", blocked_by: "lifeos-ingest transcription (#89)" };
+        return MimeRoute::Unsupported { kind: "video", blocked_by: VIDEO_GAP };
     }
     if IMAGE_EXT.iter().any(|ext| lower.ends_with(ext)) {
         return MimeRoute::Unsupported { kind: "image", blocked_by: "lifeos-ingest image captioning (#90)" };
@@ -102,8 +113,8 @@ pub fn route_by_mime(name: &str, hint_kind: Option<&str>) -> MimeRoute {
         return MimeRoute::Unsupported { kind: "docx", blocked_by: "lifeos-ingest text extraction (#90)" };
     }
     match hint_kind {
-        Some("audio") => MimeRoute::Unsupported { kind: "audio", blocked_by: "lifeos-ingest transcription (#89)" },
-        Some("video") => MimeRoute::Unsupported { kind: "video", blocked_by: "lifeos-ingest transcription (#89)" },
+        Some("audio") => MimeRoute::Audio,
+        Some("video") => MimeRoute::Unsupported { kind: "video", blocked_by: VIDEO_GAP },
         Some("image") => MimeRoute::Unsupported { kind: "image", blocked_by: "lifeos-ingest image captioning (#90)" },
         _ => MimeRoute::Unsupported { kind: "unknown", blocked_by: "no MIME route defined for this file type yet" },
     }
@@ -172,6 +183,91 @@ impl Embedder for SubprocessEmbedder {
     }
 }
 
+/// One transcribed span, real timestamps (issue #89) - the `t_start`/`t_end`
+/// fields docs/MEDIA-INTELLIGENCE.md §5 always specified but #88's plain-text
+/// path had no locator for.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TranscriptSegment {
+    pub text: String,
+    pub t_start_secs: f64,
+    pub t_end_secs: f64,
+}
+
+/// Runs 16kHz mono f32 PCM through a real transcription model. DI trait,
+/// same shape as `Embedder`/`lifeos_drain::Notifier`/`ModuleBuilder`.
+#[async_trait]
+pub trait Transcriber: Send + Sync {
+    async fn transcribe(&self, samples: &[f32]) -> Result<Vec<TranscriptSegment>, String>;
+}
+
+/// Used when `LIFEOS_WHISPER_MODEL` is unset. Unlike `NoopEmbedder` (which
+/// silently degrades - a missing memvec still leaves lexically-searchable
+/// segments), a missing transcriber for an audio file `route_by_mime` says
+/// it CAN handle is a real capability gap: fail loudly instead of silently
+/// producing zero segments for content the router promised to process.
+pub struct NoopTranscriber;
+
+#[async_trait]
+impl Transcriber for NoopTranscriber {
+    async fn transcribe(&self, _samples: &[f32]) -> Result<Vec<TranscriptSegment>, String> {
+        Err("no whisper model configured (LIFEOS_WHISPER_MODEL unset)".to_string())
+    }
+}
+
+/// Real whisper.cpp transcription via `whisper-rs`. Inference is CPU-bound
+/// sync work, so it runs on `spawn_blocking` rather than the async
+/// `lifeos-drain` poll loop's thread.
+pub struct WhisperTranscriber {
+    pub model_path: String,
+}
+
+#[async_trait]
+impl Transcriber for WhisperTranscriber {
+    async fn transcribe(&self, samples: &[f32]) -> Result<Vec<TranscriptSegment>, String> {
+        let model_path = self.model_path.clone();
+        let samples = samples.to_vec();
+        tokio::task::spawn_blocking(move || run_whisper(&model_path, &samples))
+            .await
+            .map_err(|e| format!("transcription task panicked: {e}"))?
+    }
+}
+
+fn run_whisper(model_path: &str, samples: &[f32]) -> Result<Vec<TranscriptSegment>, String> {
+    use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+
+    let ctx = WhisperContext::new_with_params(model_path, WhisperContextParameters::default())
+        .map_err(|e| format!("failed to load whisper model at '{model_path}': {e}"))?;
+    let mut state = ctx.create_state().map_err(|e| format!("failed to create whisper state: {e}"))?;
+
+    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+    params.set_language(Some("en"));
+    params.set_translate(false);
+    params.set_no_timestamps(false);
+    params.set_print_special(false);
+    params.set_print_progress(false);
+    params.set_print_realtime(false);
+    params.set_print_timestamps(false);
+
+    state.full(params, samples).map_err(|e| format!("whisper inference failed: {e}"))?;
+
+    let n = state.full_n_segments();
+    let mut segments = Vec::with_capacity(n as usize);
+    for i in 0..n {
+        let Some(seg) = state.get_segment(i) else { continue };
+        let text = seg.to_str().map_err(|e| format!("failed to read segment {i} text: {e}"))?;
+        let trimmed = text.trim().to_string();
+        if trimmed.is_empty() {
+            continue;
+        }
+        segments.push(TranscriptSegment {
+            text: trimmed,
+            t_start_secs: seg.start_timestamp() as f64 / 100.0,
+            t_end_secs: seg.end_timestamp() as f64 / 100.0,
+        });
+    }
+    Ok(segments)
+}
+
 /// A completed (or honestly-degraded) ingest run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IngestOutcome {
@@ -188,6 +284,8 @@ pub enum IngestError {
     NoContent,
     Db(libsql::Error),
     Io(std::io::Error),
+    Audio(AudioError),
+    Transcription(String),
 }
 
 impl fmt::Display for IngestError {
@@ -198,6 +296,8 @@ impl fmt::Display for IngestError {
             IngestError::NoContent => write!(f, "no blob_ref available (neither payload nor entity has one)"),
             IngestError::Db(e) => write!(f, "db error: {e}"),
             IngestError::Io(e) => write!(f, "blob store error: {e}"),
+            IngestError::Audio(e) => write!(f, "{e}"),
+            IngestError::Transcription(e) => write!(f, "transcription failed: {e}"),
         }
     }
 }
@@ -243,12 +343,85 @@ fn entity_display_name(entity: &SourceEntity, payload: &IngestJobPayload) -> Str
     String::new()
 }
 
+/// Inserts one `type=segment` child entity, calls `embedder.embed`, and
+/// returns its id. Shared by the plain-text (#88) and audio (#89) paths -
+/// `t_start`/`t_end` are `None` for plain text (no real locator) and
+/// `Some` for transcribed audio.
+async fn insert_segment(
+    conn: &Connection,
+    embedder: &(dyn Embedder + Sync),
+    workspace_id: &str,
+    module: &str,
+    parent_id: &str,
+    text: &str,
+    t_start_secs: Option<f64>,
+    t_end_secs: Option<f64>,
+    now: i64,
+) -> Result<String, IngestError> {
+    let seg_id = new_id("segment");
+    let mut attrs = json!({ "text": text });
+    if let (Some(t0), Some(t1)) = (t_start_secs, t_end_secs) {
+        attrs["t_start"] = json!(t0);
+        attrs["t_end"] = json!(t1);
+    }
+    conn.execute(
+        "INSERT INTO entities (id, workspace_id, module, type, parent_id, attrs, source, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, 'segment', ?4, ?5, 'lifeos-ingest', ?6, ?6)",
+        params![
+            seg_id.clone(),
+            workspace_id,
+            module,
+            parent_id,
+            serde_json::to_string(&attrs).unwrap_or_else(|_| "{}".into()),
+            now
+        ],
+    )
+    .await
+    .map_err(IngestError::Db)?;
+    embedder.embed(workspace_id, &seg_id, text).await;
+    Ok(seg_id)
+}
+
+/// Sets the parent entity's transcript rollup + emits `ingest.completed`.
+/// Shared by the plain-text and audio completion paths.
+async fn finish_completed(
+    conn: &Connection,
+    store: &lifeos_vcs::ObjectStore,
+    workspace_id: &str,
+    entity_id: &str,
+    full_text: &str,
+    segment_ids: Vec<String>,
+    now: i64,
+) -> Result<IngestOutcome, IngestError> {
+    let transcript_ref = lifeos_vcs::store_blob(store, full_text.as_bytes()).map_err(IngestError::Io)?;
+    conn.execute(
+        "UPDATE entities SET attrs = json_set(attrs, '$.transcript_ref', ?1) WHERE id=?2",
+        params![transcript_ref, entity_id],
+    )
+    .await
+    .map_err(IngestError::Db)?;
+
+    emit_event(
+        conn,
+        workspace_id,
+        "ingest.completed",
+        entity_id,
+        &json!({ "segment_count": segment_ids.len() }),
+        now,
+    )
+    .await
+    .map_err(IngestError::Db)?;
+
+    Ok(IngestOutcome::Completed { segment_ids })
+}
+
 /// The core, fully-testable orchestration `lifeos-drain` calls for every
 /// claimed `ingest` job.
 pub async fn process_ingest_job(
     conn: &Connection,
     store: &lifeos_vcs::ObjectStore,
     embedder: &(dyn Embedder + Sync),
+    transcriber: &(dyn Transcriber + Sync),
     workspace_id: &str,
     payload: IngestJobPayload,
     now: i64,
@@ -279,46 +452,42 @@ pub async fn process_ingest_job(
             let chunks = chunk_plain_text(&text);
             let mut segment_ids = Vec::with_capacity(chunks.len());
             for chunk in &chunks {
-                let seg_id = new_id("segment");
-                let attrs = json!({ "text": chunk });
-                conn.execute(
-                    "INSERT INTO entities (id, workspace_id, module, type, parent_id, attrs, source, created_at, updated_at) \
-                     VALUES (?1, ?2, ?3, 'segment', ?4, ?5, 'lifeos-ingest', ?6, ?6)",
-                    params![
-                        seg_id.clone(),
-                        workspace_id,
-                        entity.module.clone(),
-                        entity_id.clone(),
-                        serde_json::to_string(&attrs).unwrap_or_else(|_| "{}".into()),
-                        now
-                    ],
-                )
-                .await
-                .map_err(IngestError::Db)?;
-                embedder.embed(workspace_id, &seg_id, chunk).await;
+                let seg_id =
+                    insert_segment(conn, embedder, workspace_id, &entity.module, &entity_id, chunk, None, None, now).await?;
                 segment_ids.push(seg_id);
             }
 
-            let transcript_ref = lifeos_vcs::store_blob(store, text.as_bytes()).map_err(IngestError::Io)?;
-            conn.execute(
-                "UPDATE entities SET attrs = json_set(attrs, '$.transcript_ref', ?1) WHERE id=?2",
-                params![transcript_ref, entity_id.clone()],
-            )
-            .await
-            .map_err(IngestError::Db)?;
+            finish_completed(conn, store, workspace_id, &entity_id, &text, segment_ids, now).await
+        }
+        MimeRoute::Audio => {
+            let bytes = lifeos_vcs::read_blob(store, &blob_ref).map_err(IngestError::Io)?;
+            let samples = audio::decode_to_16k_mono_f32(&bytes).map_err(IngestError::Audio)?;
+            let transcript_segments =
+                transcriber.transcribe(&samples).await.map_err(IngestError::Transcription)?;
 
-            emit_event(
-                conn,
-                workspace_id,
-                "ingest.completed",
-                &entity_id,
-                &json!({ "segment_count": segment_ids.len() }),
-                now,
-            )
-            .await
-            .map_err(IngestError::Db)?;
+            let mut segment_ids = Vec::with_capacity(transcript_segments.len());
+            let mut full_text = String::new();
+            for seg in &transcript_segments {
+                let seg_id = insert_segment(
+                    conn,
+                    embedder,
+                    workspace_id,
+                    &entity.module,
+                    &entity_id,
+                    &seg.text,
+                    Some(seg.t_start_secs),
+                    Some(seg.t_end_secs),
+                    now,
+                )
+                .await?;
+                segment_ids.push(seg_id);
+                if !full_text.is_empty() {
+                    full_text.push(' ');
+                }
+                full_text.push_str(&seg.text);
+            }
 
-            Ok(IngestOutcome::Completed { segment_ids })
+            finish_completed(conn, store, workspace_id, &entity_id, &full_text, segment_ids, now).await
         }
         MimeRoute::Unsupported { kind, blocked_by } => {
             finish_unsupported(conn, workspace_id, &entity_id, kind, blocked_by, now).await
@@ -416,14 +585,28 @@ mod tests {
         }
     }
 
+    struct MockTranscriber {
+        result: Result<Vec<TranscriptSegment>, String>,
+    }
+
+    #[async_trait]
+    impl Transcriber for MockTranscriber {
+        async fn transcribe(&self, _samples: &[f32]) -> Result<Vec<TranscriptSegment>, String> {
+            self.result.clone()
+        }
+    }
+
     #[test]
     fn route_by_mime_dispatches_by_extension() {
         assert_eq!(route_by_mime("notes.txt", None), MimeRoute::PlainText);
         assert_eq!(route_by_mime("README.md", None), MimeRoute::PlainText);
-        match route_by_mime("clip.mp4", None) {
+        assert_eq!(route_by_mime("voicenote.mp3", None), MimeRoute::Audio);
+        assert_eq!(route_by_mime("clip.wav", None), MimeRoute::Audio);
+        assert_eq!(route_by_mime("voicenote.m4a", None), MimeRoute::Audio);
+        match route_by_mime("clip.mov", None) {
             MimeRoute::Unsupported { kind, blocked_by } => {
                 assert_eq!(kind, "video");
-                assert!(blocked_by.contains("#89"));
+                assert!(!blocked_by.contains("#89"), "closed issue #89 should not be named as still-blocking");
             }
             other => panic!("expected Unsupported, got {other:?}"),
         }
@@ -460,8 +643,9 @@ mod tests {
         insert_file_entity(&conn, "ent_file", "ws_1", "notes.txt", &blob_ref).await;
 
         let embedder = MockEmbedder::new();
+        let transcriber = MockTranscriber { result: Ok(vec![]) };
         let payload = IngestJobPayload { entity_id: Some("ent_file".into()), ..Default::default() };
-        let outcome = process_ingest_job(&conn, &store, &embedder, "ws_1", payload, 100).await.unwrap();
+        let outcome = process_ingest_job(&conn, &store, &embedder, &transcriber, "ws_1", payload, 100).await.unwrap();
 
         let segment_ids = match outcome {
             IngestOutcome::Completed { segment_ids } => segment_ids,
@@ -512,13 +696,15 @@ mod tests {
         insert_file_entity(&conn, "ent_clip", "ws_1", "clip.mp4", &blob_ref).await;
 
         let embedder = MockEmbedder::new();
+        let transcriber = MockTranscriber { result: Ok(vec![]) };
         let payload = IngestJobPayload { entity_id: Some("ent_clip".into()), ..Default::default() };
-        let outcome = process_ingest_job(&conn, &store, &embedder, "ws_1", payload, 100).await.unwrap();
+        let outcome = process_ingest_job(&conn, &store, &embedder, &transcriber, "ws_1", payload, 100).await.unwrap();
 
         match outcome {
             IngestOutcome::Unsupported { kind, blocked_by } => {
                 assert_eq!(kind, "video");
-                assert!(blocked_by.contains("#89"));
+                assert!(!blocked_by.is_empty());
+                assert!(!blocked_by.contains("#89"), "closed issue #89 should not be named as still-blocking");
             }
             other => panic!("expected Unsupported, got {other:?}"),
         }
@@ -539,7 +725,7 @@ mod tests {
         let status: String = row.get(0).unwrap();
         let blocked_by: String = row.get(1).unwrap();
         assert_eq!(status, "unsupported");
-        assert!(blocked_by.contains("#89"));
+        assert!(!blocked_by.contains("#89"), "closed issue #89 should not be named as still-blocking");
 
         let mut evt_rows = conn.query("SELECT type FROM events WHERE entity_id='ent_clip'", ()).await.unwrap();
         let evt_type: String = evt_rows.next().await.unwrap().unwrap().get(0).unwrap();
@@ -553,8 +739,9 @@ mod tests {
         let conn = fresh_conn("test_ingest_missing_entity.db").await;
 
         let embedder = MockEmbedder::new();
+        let transcriber = MockTranscriber { result: Ok(vec![]) };
         let payload = IngestJobPayload::default();
-        let result = process_ingest_job(&conn, &store, &embedder, "ws_1", payload, 100).await;
+        let result = process_ingest_job(&conn, &store, &embedder, &transcriber, "ws_1", payload, 100).await;
 
         assert!(matches!(result, Err(IngestError::MissingEntityId)));
     }
@@ -574,9 +761,100 @@ mod tests {
         .unwrap();
 
         let embedder = MockEmbedder::new();
+        let transcriber = MockTranscriber { result: Ok(vec![]) };
         let payload = IngestJobPayload { entity_id: Some("ent_no_blob".into()), ..Default::default() };
-        let result = process_ingest_job(&conn, &store, &embedder, "ws_1", payload, 100).await;
+        let result = process_ingest_job(&conn, &store, &embedder, &transcriber, "ws_1", payload, 100).await;
 
         assert!(matches!(result, Err(IngestError::NoContent)));
+    }
+
+    fn synth_wav_blob() -> Vec<u8> {
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let spec = hound::WavSpec { channels: 1, sample_rate: 16_000, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+        let mut writer = hound::WavWriter::new(&mut buf, spec).unwrap();
+        for i in 0..8_000u32 {
+            let t = i as f32 / 16_000.0;
+            let sample = (t * 440.0 * std::f32::consts::TAU).sin() * i16::MAX as f32 * 0.5;
+            writer.write_sample(sample as i16).unwrap();
+        }
+        writer.finalize().unwrap();
+        buf.into_inner()
+    }
+
+    #[tokio::test]
+    async fn audio_produces_timestamped_segments_transcript_ref_and_embeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ObjectStore::new(dir.path());
+        let conn = fresh_conn("test_ingest_audio.db").await;
+
+        let blob_ref = lifeos_vcs::store_blob(&store, &synth_wav_blob()).unwrap();
+        insert_file_entity(&conn, "ent_clip", "ws_1", "voicenote.wav", &blob_ref).await;
+
+        let embedder = MockEmbedder::new();
+        let transcriber = MockTranscriber {
+            result: Ok(vec![
+                TranscriptSegment { text: "the treasure is buried".into(), t_start_secs: 0.0, t_end_secs: 1.2 },
+                TranscriptSegment { text: "under the old oak tree".into(), t_start_secs: 1.2, t_end_secs: 2.5 },
+            ]),
+        };
+        let payload = IngestJobPayload { entity_id: Some("ent_clip".into()), ..Default::default() };
+        let outcome = process_ingest_job(&conn, &store, &embedder, &transcriber, "ws_1", payload, 100).await.unwrap();
+
+        let segment_ids = match outcome {
+            IngestOutcome::Completed { segment_ids } => segment_ids,
+            other => panic!("expected Completed, got {other:?}"),
+        };
+        assert_eq!(segment_ids.len(), 2);
+
+        let mut rows = conn
+            .query(
+                "SELECT json_extract(attrs,'$.text'), json_extract(attrs,'$.t_start'), json_extract(attrs,'$.t_end') \
+                 FROM entities WHERE type='segment' ORDER BY json_extract(attrs,'$.t_start')",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let text: String = row.get(0).unwrap();
+        let t_start: f64 = row.get(1).unwrap();
+        let t_end: f64 = row.get(2).unwrap();
+        assert_eq!(text, "the treasure is buried");
+        assert_eq!(t_start, 0.0);
+        assert_eq!(t_end, 1.2);
+
+        assert_eq!(embedder.calls.lock().unwrap().len(), 2);
+
+        let mut parent_rows = conn
+            .query("SELECT json_extract(attrs,'$.transcript_ref') FROM entities WHERE id='ent_clip'", ())
+            .await
+            .unwrap();
+        let transcript_ref: Option<String> = parent_rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert!(transcript_ref.is_some());
+
+        let mut evt_rows = conn.query("SELECT type FROM events WHERE entity_id='ent_clip'", ()).await.unwrap();
+        let evt_type: String = evt_rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(evt_type, "ingest.completed");
+    }
+
+    #[tokio::test]
+    async fn transcription_failure_is_a_real_error_with_no_partial_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ObjectStore::new(dir.path());
+        let conn = fresh_conn("test_ingest_audio_fail.db").await;
+
+        let blob_ref = lifeos_vcs::store_blob(&store, &synth_wav_blob()).unwrap();
+        insert_file_entity(&conn, "ent_clip2", "ws_1", "voicenote.wav", &blob_ref).await;
+
+        let embedder = MockEmbedder::new();
+        let transcriber = MockTranscriber { result: Err("no whisper model configured".into()) };
+        let payload = IngestJobPayload { entity_id: Some("ent_clip2".into()), ..Default::default() };
+        let result = process_ingest_job(&conn, &store, &embedder, &transcriber, "ws_1", payload, 100).await;
+
+        assert!(matches!(result, Err(IngestError::Transcription(_))));
+
+        let mut seg_rows = conn.query("SELECT COUNT(*) FROM entities WHERE type='segment'", ()).await.unwrap();
+        let count: i64 = seg_rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(count, 0);
+        assert!(embedder.calls.lock().unwrap().is_empty());
     }
 }

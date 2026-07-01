@@ -45,3 +45,8 @@ test_*.db
 # lifeos-vcs CAS blob storage (local dev runs)
 /services/lifeos-blobs/
 *.blobs/
+
+# whisper.cpp GGML models (issue #89) - downloaded locally, not committed
+/services/.whisper-models/
+*.ggml.bin
+ggml-*.bin
