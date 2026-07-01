@@ -370,3 +370,23 @@ check once all of the above is in place: send `/addmodule <something>` to the re
 ```sh
 node server/scripts/renderSmokeLive.js   # expects {"valid":true,"errors":[]}
 ```
+
+### #83 - `lifeos-vcs` R2 blob mirror (`R2_BUCKET`, `R2_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`)
+
+`services/lifeos-vcs::BlobMirror::from_r2_env()` (docs/VERSIONING.md §2.1/§5) mirrors CAS
+objects to Cloudflare R2 out-of-band from the libSQL replica. Requires an R2 bucket and an
+R2 API token (Cloudflare dashboard → R2 → Manage R2 API Tokens → create a token with
+Object Read & Write on the bucket):
+
+```sh
+export R2_BUCKET="lifeos-blobs"
+export R2_ENDPOINT="https://<account_id>.r2.cloudflarestorage.com"
+export R2_ACCESS_KEY_ID="<r2 access key id>"
+export R2_SECRET_ACCESS_KEY="<r2 secret access key>"
+```
+
+The automated test suite exercises the same `mirror_object`/`pull_object`/`pull_on_demand`
+code paths against a local-filesystem `object_store` backend standing in for R2 (no network,
+no credentials needed for `cargo test`). One true end-to-end check once the bucket/token
+above are set: mirror a blob, delete it from the local CAS directory, confirm
+`pull_on_demand` fetches it back from the real bucket and the BLAKE3 hash still matches.

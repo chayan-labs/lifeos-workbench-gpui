@@ -2,12 +2,14 @@ mod blob;
 mod chunk;
 mod commit;
 mod hash;
+mod mirror;
 mod store;
 
 pub use blob::{read_blob, store_blob, BlobManifest};
 pub use chunk::{chunk_reader, ChunkRef};
 pub use commit::{commit_version, history, VersionEntry};
 pub use hash::hash_bytes;
+pub use mirror::{pull_on_demand, BlobMirror, MirrorError};
 pub use store::ObjectStore;
 
 #[cfg(test)]
