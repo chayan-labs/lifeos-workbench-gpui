@@ -157,6 +157,43 @@ noted here as a known finding.
 - **One bounded retry** before declaring failure (a single transient render error shouldn't burn a valid module).
 - Fail → discard the worktree.
 
+**Implemented (issue #75):** `server/lib/appBoot.js` boots the real stack as disposable child
+processes on ephemeral ports (`server/lib/appBoot.js`'s own `getEphemeralPort()`) - the real
+`lifeos-api` debug binary with `LIFEOS_DB_PATH`/`LIFEOS_DERIVED_DB_PATH` pointed at a fresh
+`mkdtemp` scratch directory and `TURSO_URL`/`TURSO_TOKEN` cleared (never syncs, never touches
+`lifeos.db`), and the real Vite dev server (`--host 127.0.0.1` pinned explicitly - Vite's
+default `localhost` bind resolved to the IPv6 loopback first on the machine this was built on,
+which then refused the IPv4 readiness poll). `server/validators/render.js` (rewritten - the
+earlier version was an unconditional `return true` stub) launches headless Chromium, sets the
+SPA's `life_os_loggedin` localStorage flag via `context.addInitScript` to skip the login gate,
+collects `console`/`pageerror` for the full page session, `POST /api/event` seeds the exact
+`module.installed` event the real self-extension install path (§1 step 5) emits (no auth
+needed - `/api/event` falls back to the default workspace with no bearer token, same as the
+frontend does), and races the real `module-mounted:<id>` `CustomEvent`
+(`frontend/src/lib/moduleRegistry.js`) against a first-error signal and a bounded timeout - not
+an arbitrary sleep, the timeout is only the safety net for a event that genuinely never fires.
+One bounded retry (`MAX_ATTEMPTS = 2`) on any failure; teardown (browser, both child processes,
+scratch DB dir) always runs, even on failure. `scaffold.js` calls this after Validator 1 passes
+and before `commitAndMerge`.
+**Scope note:** the live hot-install path only ever carries a minimal `{id, name, version,
+icon}` manifest through the real SSE event - `InstalledModulePage.jsx` renders hot-installed
+modules as a flat list, not through the full multi-view `ModuleManifestPage` that the 14 static
+day-1 modules get. So "assert 0 console/page errors + `module-mounted:<id>` fires" is exercised
+for real; "assert each declared view mounts a node" isn't yet, since there's no live per-view
+render path for a hot-installed module to assert against today - that's frontend work beyond
+this issue (same kind of scope line #74 drew for `agentTool`/`botCommand` id uniqueness).
+Tested via `server/test/renderSmoke.test.js` (real Playwright + real HTTP fixtures standing in
+for the heavy cargo/Vite boot, so the suite stays fast: happy path, retry-then-succeed,
+retry-exhausted, timeout-without-firing, teardown-always-runs) and
+`server/test/appBoot.test.js` (`getEphemeralPort` returns distinct, bindable ports).
+`server/scripts/renderSmokeLive.js` is a manual entry point that runs the real stack end-to-end
+(not part of the vitest suite) - unlike #72's Agent SDK constraint, this needed no paid API key
+and no git mutation, so it was actually run live in this session against the real `reading`
+module id and passed (`{"valid":true,"errors":[]}`), confirming the full boot → mount →
+assert → teardown pipeline works, not just the mocked orchestration tests. Requires
+`cargo build --bin lifeos-api` and `npm install` in `frontend/` to have been run first, plus a
+one-time `npx playwright install chromium` (documented in `docs/MANUAL-SETUP.md`).
+
 ---
 
 ## 5. Isolation & commit (use Claude Code's own worktree feature)

@@ -327,3 +327,20 @@ npx wrangler secret put DIGEST_CHAT_ID   # not actually secret, but simplest as 
 either a `wrangler secret put` or an uncommented `[vars]` line works in production - it isn't
 sensitive, it's just where the digest goes.) Edit the cron expression in `wrangler.toml` and
 redeploy to change the send time.
+
+### #75 - one-time Playwright browser download for the render-smoke validator
+
+`server/validators/render.js` (docs/SELF-EXTENSION.md §4) drives headless Chromium via
+`playwright`, which ships as an npm package but not with a browser binary - download it once:
+
+```sh
+cd server && npx playwright install chromium
+```
+
+Also requires `cargo build --bin lifeos-api` (services/) and `npm install` (frontend/) to
+have been run at least once, since the validator boots both as real child processes.
+`server/scripts/renderSmokeLive.js` is a manual smoke check once all three are done:
+
+```sh
+node server/scripts/renderSmokeLive.js   # expects {"valid":true,"errors":[]}
+```

@@ -1,7 +1,8 @@
-// Self-extension builder (issues #72/#73, docs/SELF-EXTENSION.md). Drives the
-// Claude Agent SDK, tool-restricted by all three defense-in-depth layers
-// (§2), in an isolated git worktree, requires a schema-valid structured-
-// output manifest (§3), and commits the result as the install (§5).
+// Self-extension builder (issues #72/#73/#74/#75, docs/SELF-EXTENSION.md).
+// Drives the Claude Agent SDK, tool-restricted by all three defense-in-depth
+// layers (§2), in an isolated git worktree, requires a schema-valid
+// structured-output manifest (§3), passes both validators (§4), and commits
+// the result as the install (§5).
 //
 // `slugify()` still picks the module id *before* `query()` runs (Layer B's
 // hook needs a concrete target directory up front), but the agent's own
@@ -9,12 +10,6 @@
 // the two fails the build rather than silently installing a mismatched
 // manifest.
 //
-// Deliberately NOT wired in here (separate issue, matches this project's
-// incremental pattern - e.g. #66 enqueueing a job before a drain existed):
-// - Validator 2, render smoke (§4, issue #75) - `server/validators/render.js`
-//   is still a fake (unconditional `return true`) left over from an earlier
-//   prototype commit; calling it here would just give false confidence, so
-//   this file does not import it. Gating the merge on it is #75's job.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { query as defaultQuery } from "@anthropic-ai/claude-agent-sdk";
@@ -24,6 +19,7 @@ import { createPreToolUseHook } from "./lib/preToolUseHook.js";
 import { slugify } from "./lib/slugify.js";
 import { commitAndMerge, createWorktree, removeWorktree } from "./lib/worktree.js";
 import { validateStructural } from "./validators/structural.js";
+import { validateRenderSmoke as defaultValidateRenderSmoke } from "./validators/render.js";
 
 const DEFAULT_REPO_ROOT = path.resolve(import.meta.dirname, "..");
 
@@ -88,6 +84,7 @@ async function runAgent(queryFn, prompt, options, hookState, moduleId) {
 export async function scaffoldModule(prompt, workspaceId, opts = {}) {
   const repoRoot = opts.repoRoot ?? DEFAULT_REPO_ROOT;
   const queryFn = opts.queryFn ?? defaultQuery;
+  const validateRenderSmoke = opts.validateRenderSmoke ?? defaultValidateRenderSmoke;
 
   const moduleId = slugify(prompt);
   const { worktreePath, branch } = await createWorktree(repoRoot, moduleId);
@@ -130,6 +127,16 @@ export async function scaffoldModule(prompt, workspaceId, opts = {}) {
     });
     if (!structural.valid) {
       throw new Error(`Structural validation failed: ${structural.errors.join("; ")}`);
+    }
+
+    // Validator 2 (§4, issue #75) - boots the real app stack (its own
+    // default repoRoot, not the worktree/scratch `repoRoot` above: the
+    // frontend build and lifeos-api binary only exist in the real checkout,
+    // and the check only needs `moduleId` + the manifest's `name`, not any
+    // worktree-specific file - see server/validators/render.js's header).
+    const render = await validateRenderSmoke(moduleId, manifest);
+    if (!render.valid) {
+      throw new Error(`Render smoke validation failed: ${render.errors.join("; ")}`);
     }
 
     await commitAndMerge(repoRoot, worktreePath, branch, moduleId);

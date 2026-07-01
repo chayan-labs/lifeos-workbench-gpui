@@ -92,6 +92,16 @@ discards the worktree, same as a hook denial or a bad structured-output manifest
 `docs/SELF-EXTENSION.md` §4's note for the full breakdown and a genuine pre-existing
 inconsistency it found in `modules/learning`.
 
+**Implemented (issue #75):** Validator 2 (§4) now runs for real too - `server/validators/
+render.js` boots the real app stack (lifeos-api + Vite) as disposable child processes on
+ephemeral ports against a scratch DB directory (never `lifeos.db`, `TURSO_URL`/`TURSO_TOKEN`
+cleared so it can never sync), headless-Chromium-navigates it, and requires 0 console/page
+errors plus a real `module-mounted:<id>` event before declaring success. `scaffold.js` calls
+it after Validator 1 and before `commitAndMerge` - a failure aborts and discards the
+worktree, same fail-closed chain as every other gate in this section. See
+`docs/SELF-EXTENSION.md` §4's note, including a real live end-to-end run performed in this
+session (no paid API key or git mutation needed, unlike #72's Agent SDK constraint).
+
 ---
 
 ## 4. Browser actuator containment

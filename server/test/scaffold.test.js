@@ -84,6 +84,11 @@ describe("scaffoldModule - happy path", () => {
     const result = await scaffoldModule("add a reading list module", "ws_test", {
       repoRoot,
       queryFn: (params) => benignQuery(params),
+      // Validator 2 (#75) boots the real app stack - covered on its own in
+      // renderSmoke.test.js; this suite only exercises scaffold.js's
+      // orchestration, so a stub keeps it fast and independent of a local
+      // cargo/frontend build being present.
+      validateRenderSmoke: async () => ({ valid: true, errors: [] }),
     });
 
     expect(result).toEqual({
@@ -98,6 +103,32 @@ describe("scaffoldModule - happy path", () => {
 
     const { stdout: worktrees } = await git(["worktree", "list"]);
     expect(worktrees.split("\n").filter(Boolean)).toHaveLength(1); // only the main worktree remains
+  });
+});
+
+describe("scaffoldModule - render smoke validation (issue #75)", () => {
+  it("aborts and merges nothing when Validator 2 reports the module doesn't render cleanly", async () => {
+    const { stdout: before } = await git(["log", "--oneline", "main"]);
+
+    const result = await scaffoldModule("add a reading list module", "ws_test", {
+      repoRoot,
+      queryFn: (params) => benignQuery(params),
+      validateRenderSmoke: async (moduleId, manifest) => {
+        expect(moduleId).toBe("add_a_reading_list_module");
+        expect(manifest).toEqual(VALID_MANIFEST);
+        return { valid: false, errors: ["console/page errors during render: TypeError: boom"] };
+      },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/Render smoke validation failed/);
+    expect(result.error).toMatch(/TypeError: boom/);
+
+    const { stdout: after } = await git(["log", "--oneline", "main"]);
+    expect(after).toBe(before);
+
+    const { stdout: worktrees } = await git(["worktree", "list"]);
+    expect(worktrees.split("\n").filter(Boolean)).toHaveLength(1);
   });
 });
 
