@@ -308,6 +308,19 @@ describe("createBot - gated approve/deny (issue #66)", () => {
   });
 });
 
+describe("createBot - recall (issue #69)", () => {
+  it("/recall finds a previously captured topic", async () => {
+    const bot = createBot(deps, FAKE_BOT_INFO);
+    const sent = repliesFrom(bot);
+
+    await bot.init();
+    await bot.handleUpdate(textUpdate("/topic the halting problem"));
+    await bot.handleUpdate(textUpdate("/recall halting"));
+
+    expect(sent[1]).toContain("the halting problem");
+  });
+});
+
 describe("createBot - heavy-job enqueue (issue #67)", () => {
   it("/addmodule replies queued and never writes code or files itself", async () => {
     const bot = createBot(deps, FAKE_BOT_INFO);

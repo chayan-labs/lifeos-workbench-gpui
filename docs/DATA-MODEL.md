@@ -208,6 +208,16 @@ ATTACH DATABASE 'file:lifeos-derived.db' AS d;  -- plain SQLite; FTS5 + sqlite-v
 - **Keep sqlite-vec/memvec; do NOT switch to libSQL native vectors** - native vectors are beta with the weakest local path and would only help if vectors lived in the synced DB (which violates §5).
 - The shared canonical DB **is** the cross-tier memory the Haiku bot recalls from.
 
+**Implemented (issue #69):** the Mac-side hybrid described above is `services/lifeos-api/
+src/routes/search.rs` (`GET /api/search`), already built - FTS5 lexical + memvec.py
+semantic, fused with RRF, workspace-scoped. The Worker bot's `/recall <query>`
+(`worker/src/recall.ts`) is **not** that endpoint: `lifeos-derived.db` is un-synced/Mac-local
+and the Mac API only binds 127.0.0.1, so a Cloudflare Worker can reach neither while the
+laptop is off. `/recall` is instead a lexical-only fallback - a case-insensitive `LIKE` over
+`title`/`attrs` in the canonical Turso DB - trading recall quality for the "works with the
+laptop off" guarantee every other bot command has. Citing the matched entity (short id +
+module/type/title) is the one property both paths share.
+
 ---
 
 ## 7. No-migration growth

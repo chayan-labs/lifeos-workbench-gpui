@@ -34,6 +34,13 @@ Real dispatch - `services/lifeos-drain` actually claiming and running `execute_a
 is not built yet; `dispatch()`'s other job kinds (`pipeline`/`module_build`/`eval`/
 `reconcile`) are stubs too. The bot side of both queues is done and tested; the drain side
 is a separate, not-yet-scoped piece of work.
+- Issue #69: `/recall <query>` (`src/recall.ts`) - lexical fallback recall, workspace-scoped,
+  citing the matched entity by short id. NOT the real hybrid: `services/lifeos-api/src/
+  routes/search.rs` already implements FTS5+memvec RRF fusion over `lifeos-derived.db`, but
+  that DB is intentionally un-synced/Mac-local (docs/DATA-MODEL.md §5) and memvec.py is a
+  Python subprocess - neither is reachable from a Cloudflare Worker (no filesystem, and the
+  Mac API only binds 127.0.0.1). This command trades recall quality for laptop-off
+  availability: a case-insensitive `LIKE` over `title`/`attrs` in the canonical Turso DB.
 
 Every DB query in `src/entities.ts` filters by `workspace_id`, resolved server-side from
 `env.WORKSPACE_ID` (never from Telegram input) via `resolveWorkspaceId()` in `src/db.ts`.

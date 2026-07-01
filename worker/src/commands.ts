@@ -19,6 +19,7 @@ import { sumClosedTradePnl } from "./events.js";
 import type { ApprovalResult } from "./approvals.js";
 import { enqueueJob } from "./jobs.js";
 import { enqueueModuleRequest } from "./moduleRequests.js";
+import { recallEntities } from "./recall.js";
 
 const SHORT_ID_LEN = 6;
 
@@ -155,4 +156,18 @@ export async function ingest(db: WorkerDb, workspaceId: string, text: string): P
 
   await enqueueJob(db, workspaceId, "ingest", { text: payload });
   return "Queued for the Mac.";
+}
+
+// `/recall <query>` (issue #69): "what did I note about X". Lexical
+// substring match over the canonical DB, workspace-scoped, citing each hit's
+// short id/module/type/title so the user can jump to it - see recall.ts for
+// why this isn't the full FTS5+memvec RRF hybrid (that lives on the Mac).
+export async function recall(db: WorkerDb, workspaceId: string, text: string): Promise<string> {
+  const query = text.trim();
+  if (!query) return "Usage: /recall <what to look for>";
+
+  const hits = await recallEntities(db, workspaceId, query);
+  if (hits.length === 0) return `Nothing found for "${query}".`;
+
+  return hits.map((e) => `[${shortId(e.id)}] (${e.module}/${e.type}) ${e.title ?? "(untitled)"}`).join("\n");
 }

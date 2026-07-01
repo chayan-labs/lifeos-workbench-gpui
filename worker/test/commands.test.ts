@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { LocalDb } from "@lifeos/db/client/local";
 import { events, jobs, moduleRequests } from "@lifeos/db";
 import { eq } from "@lifeos/db/query";
-import { captureDraft, captureTask, captureTopic, inbox, ingest, markDone, pnl, quiz, requestModule, today } from "../src/commands.js";
+import { captureDraft, captureTask, captureTopic, inbox, ingest, markDone, pnl, quiz, recall, requestModule, today } from "../src/commands.js";
 import { listEntities } from "../src/entities.js";
 import { createTestDb } from "./testDb.js";
 
@@ -127,6 +127,26 @@ describe("requestModule", () => {
 
   it("rejects an empty request", async () => {
     expect(await requestModule(db, WS, "  ")).toMatch(/^Usage:/);
+  });
+});
+
+describe("recall", () => {
+  it("cites the matching entity by short id", async () => {
+    const captureReply = await captureTopic(db, WS, "the halting problem");
+    const shortId = captureReply.match(/\[(\w+)\]/)?.[1] ?? "";
+
+    const reply = await recall(db, WS, "halting");
+
+    expect(reply).toContain(`[${shortId}]`);
+    expect(reply).toContain("the halting problem");
+  });
+
+  it("reports no match", async () => {
+    expect(await recall(db, WS, "nothing captured yet")).toMatch(/^Nothing found/);
+  });
+
+  it("rejects an empty query", async () => {
+    expect(await recall(db, WS, "  ")).toMatch(/^Usage:/);
   });
 });
 

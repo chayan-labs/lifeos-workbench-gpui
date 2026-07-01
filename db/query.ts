@@ -5,4 +5,4 @@
 // copy of drizzle-orm produces types that fail to structurally match this
 // package's `entities`/`edges`/... tables - import from here, not from
 // "drizzle-orm" directly, in any package that also depends on @lifeos/db.
-export { and, asc, desc, eq, isNull, lte, or, sql } from "drizzle-orm";
+export { and, asc, desc, eq, isNull, like, lte, or, sql } from "drizzle-orm";

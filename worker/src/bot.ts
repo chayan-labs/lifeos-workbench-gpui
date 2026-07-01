@@ -14,6 +14,7 @@ import {
   markDone,
   pnl,
   quiz,
+  recall,
   requestModule,
   today,
 } from "./commands.js";
@@ -80,6 +81,12 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot {
 
   bot.command("quiz", async (ctx) => {
     await ctx.reply(await quiz(db, workspaceId));
+  });
+
+  // issue #69: lexical fallback recall - see recall.ts for why this isn't
+  // the full FTS5+memvec RRF hybrid (that lives on the Mac-only derived DB).
+  bot.command("recall", async (ctx) => {
+    await ctx.reply(await recall(db, workspaceId, ctx.match));
   });
 
   // issue #67: heavy/Mac-only work - the bot only ever enqueues, never
