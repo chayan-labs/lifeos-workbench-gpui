@@ -62,4 +62,8 @@ describe("moduleManifestJsonSchema", () => {
       expect.arrayContaining(["id", "name", "icon", "color", "entityTypes", "views", "botCommands", "agentTools"]),
     );
   });
+
+  it("carries no top-level $schema key (issue #79/#80: the Claude CLI's --json-schema flag silently rejects a schema with one, so structured_output never populates)", () => {
+    expect(moduleManifestJsonSchema).not.toHaveProperty("$schema");
+  });
 });

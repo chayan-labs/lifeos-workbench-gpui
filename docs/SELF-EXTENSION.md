@@ -176,6 +176,26 @@ still against a mocked `queryFn` and scratch git repo, no live API key (same rat
 #72's note above). The parsed `ModuleManifest` is now part of `scaffoldModule`'s success
 return value, ready for Validator 1 (#74) to consume without re-reading `module.js`.
 
+**Live-run bug found and fixed (issues #79/#80):** the first actual live `scaffoldModule()`
+run (Claude Code's own CLI-subprocess auth, no `ANTHROPIC_API_KEY`, both Haiku 4.5 and
+Sonnet tested) surfaced a real defect this mocked test suite couldn't see: `z.toJSONSchema()`
+emits a top-level `$schema` meta-key by default, and the Claude CLI's `--json-schema` flag
+silently rejects a schema carrying that key - the model never sees a valid structured-output
+tool to call, so it answers in prose/a markdown code fence instead, and `structured_output`
+never populates even though the SDK reports `subtype: "success", terminal_reason: "completed"`
+(no error, no denial - `runAgent()` was also missing a `terminal_reason` check for the
+adjacent case of a run stopped by a hook/permission/sandbox boundary, added at the same time).
+Root-caused by testing progressively simpler schemas directly against the bare `claude` CLI
+until removing `$schema` alone fixed it, confirmed on both models. Fixed in
+`server/lib/moduleManifest.js` by stripping `$schema` before exporting
+`moduleManifestJsonSchema`. Once fixed, a live run against the literal prompt "add a reading
+module" got past structured output cleanly and correctly failed at Validator 1 (#74) instead:
+`entity type "article" is already used by module "reading"` - the duplicate-type-id guard
+doing exactly its job, since `modules/reading/module.js` already exists as a hand-built day-1
+module. That's a self-collision inherent to #79/#80's literal prompts (asking the builder to
+reproduce a module that's already there), not a defect in the builder - see the issue closing
+comments for the full reasoning.
+
 ---
 
 ## 4. The two validators

@@ -69,6 +69,17 @@ async function runAgent(queryFn, prompt, options, hookState, moduleId) {
     // and the SDK's own structured-output retry exhaustion.
     throw new Error(`Agent SDK query did not complete successfully (subtype: ${resultMessage?.subtype ?? "none"})`);
   }
+  // A `result` message can report subtype:"success" while still having
+  // stopped short of a real answer (a hook/permission/sandbox boundary cut
+  // the turn off, not a hard error) - `terminal_reason` distinguishes that
+  // from an actual completed run and turns a generic "expected object,
+  // received undefined" into a diagnosable cause.
+  if (resultMessage.terminal_reason && resultMessage.terminal_reason !== "completed") {
+    throw new Error(
+      `Agent stopped before finishing (terminal_reason: ${resultMessage.terminal_reason})` +
+        (resultMessage.deferred_tool_use ? `; deferred_tool_use: ${JSON.stringify(resultMessage.deferred_tool_use)}` : ""),
+    );
+  }
 
   const parsed = ModuleManifest.safeParse(resultMessage.structured_output);
   if (!parsed.success) {
@@ -112,6 +123,10 @@ export async function scaffoldModule(prompt, workspaceId, opts = {}) {
       permissionMode: "dontAsk",
       hooks: { PreToolUse: [{ matcher: "Write|Edit", hooks: [trackedHook] }] },
       outputFormat: { type: "json_schema", schema: moduleManifestJsonSchema },
+      // Optional model override (e.g. a cheaper/faster model for a light
+      // build) - omitted entirely when unset so the SDK/CLI's own default
+      // applies, same opt-in-only shape as every other `opts.*` here.
+      ...(opts.model ? { model: opts.model } : {}),
       ...buildSandboxConfig(),
     };
 

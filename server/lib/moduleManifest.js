@@ -46,4 +46,13 @@ export const ModuleManifest = z.object({
   agentTools: z.array(AgentToolSchema),
 });
 
-export const moduleManifestJsonSchema = z.toJSONSchema(ModuleManifest);
+// z.toJSONSchema() emits a top-level `$schema` meta-key by default. The
+// Claude CLI's `--json-schema` flag (what `outputFormat: {type:"json_schema"}`
+// compiles down to, docs/SELF-EXTENSION.md §3) silently rejects a schema
+// carrying that key - the model never sees a valid structured-output tool to
+// call and falls back to answering in prose instead, so `structured_output`
+// never populates even though the SDK reports `subtype: "success"`. Found
+// via a live run (issue #79/#80); strip it here rather than downstream so
+// every consumer of `moduleManifestJsonSchema` gets the working shape.
+const { $schema: _unusedMetaSchemaKey, ...moduleManifestJsonSchemaWithoutMeta } = z.toJSONSchema(ModuleManifest);
+export const moduleManifestJsonSchema = moduleManifestJsonSchemaWithoutMeta;
