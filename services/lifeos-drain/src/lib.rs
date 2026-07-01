@@ -163,12 +163,15 @@ pub async fn reap_stuck(conn: &Connection, now: i64, cfg: DrainConfig) -> libsql
 pub enum Dispatch {
     /// A known kind whose real handler lands in a later phase (no-op stub).
     Stub(&'static str),
+    /// `ingest` jobs have a real handler now (issue #88, `lifeos_ingest::process_ingest_job`),
+    /// called directly as a library - not a subprocess, both crates share this workspace.
+    Ingest,
     /// Unknown kind - cannot be handled, will be failed.
     Unknown,
 }
 
-/// Route a job to its handler by kind. Real handlers (ingest/pipeline/
-/// module_build/eval) land in later phases; until then known kinds are
+/// Route a job to its handler by kind. `ingest` is real (#88); pipeline/
+/// module_build/eval land in later phases - until then those known kinds are
 /// acknowledged as no-op stubs and unknown kinds are rejected.
 ///
 /// `reconcile` (docs/DATA-MODEL.md §4.2) already has a real handler -
@@ -177,9 +180,14 @@ pub enum Dispatch {
 /// queued `jobs` row of this kind is acknowledged rather than rejected as
 /// Unknown; wiring drain to actually call the API is a later phase, same as
 /// the other stub kinds.
+///
+/// `module_build` jobs (from `POST /api/module-request`) stay a stub here on
+/// purpose: the real build path (#78) polls `module_requests` directly via
+/// `claim_next_module_request`, not through `jobs` - see that function's doc
+/// comment for why the two intake paths haven't converged yet.
 pub fn dispatch(kind: &str) -> Dispatch {
     match kind {
-        "ingest" => Dispatch::Stub("lifeos-ingest"),
+        "ingest" => Dispatch::Ingest,
         "pipeline" => Dispatch::Stub("lifeos-pipelines"),
         "module_build" => Dispatch::Stub("scaffold.js"),
         "eval" => Dispatch::Stub("harness eval"),
@@ -726,5 +734,12 @@ mod tests {
         assert_eq!(notifier.calls.lock().unwrap().len(), 0);
 
         let _ = std::fs::remove_file("test_run_build_no_chat.db");
+    }
+
+    #[test]
+    fn dispatch_routes_ingest_to_its_real_handler() {
+        assert_eq!(dispatch("ingest"), Dispatch::Ingest);
+        assert_eq!(dispatch("pipeline"), Dispatch::Stub("lifeos-pipelines"));
+        assert_eq!(dispatch("nonsense"), Dispatch::Unknown);
     }
 }

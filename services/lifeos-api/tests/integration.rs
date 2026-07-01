@@ -363,6 +363,26 @@ async fn planned_routes_are_honest() {
     assert_eq!(body["status"], "queued");
 }
 
+/// Issue #88: `entity_id` round-trips into the enqueued job's payload so
+/// `lifeos-drain`/`lifeos-ingest` know which entity to attach segments to.
+#[tokio::test]
+async fn ingest_carries_entity_id_into_the_enqueued_job_payload() {
+    let app = test_app().await;
+    let (st, body) = send(
+        &app.router,
+        "POST",
+        "/api/ingest",
+        Some(json!({"entity_id": "ent_notes", "uri": "s3://x/notes.txt", "kind": "text"})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::ACCEPTED);
+    let job_id = body["job_id"].as_str().unwrap();
+
+    let (_, jobs) = send(&app.router, "GET", "/api/jobs", None).await;
+    let job = jobs.as_array().unwrap().iter().find(|j| j["id"] == job_id).unwrap();
+    assert_eq!(job["payload"]["entity_id"], "ent_notes");
+}
+
 /// `/api/vcs/*` used to be a 501 stub here; it's real now (issue #86) -
 /// commit -> history -> checkout end-to-end through the actual CAS store.
 #[tokio::test]

@@ -16,6 +16,10 @@ use serde_json::{json, Value};
 
 #[derive(Deserialize)]
 pub struct IngestRequest {
+    /// The file/asset entity to ingest (issue #88). Optional for back-compat
+    /// with a bare uri/kind enqueue, but required for `lifeos-ingest` to
+    /// actually process the job - see `lifeos_ingest::process_ingest_job`.
+    entity_id: Option<String>,
     uri: Option<String>,
     kind: Option<String>,
     blob_ref: Option<String>,
@@ -32,7 +36,7 @@ pub async fn ingest(
     if !workspace_exists(&state.conn, &workspace_id).await? {
         return Err(ApiError::BadRequest(format!("unknown workspace '{workspace_id}'")));
     }
-    let payload = json!({ "uri": req.uri, "kind": req.kind, "blob_ref": req.blob_ref });
+    let payload = json!({ "entity_id": req.entity_id, "uri": req.uri, "kind": req.kind, "blob_ref": req.blob_ref });
     let job_id = super::job::enqueue(&state, &workspace_id, "ingest", &payload, 0).await?;
     Ok((StatusCode::ACCEPTED, Json(json!({ "status": "queued", "job_id": job_id }))))
 }

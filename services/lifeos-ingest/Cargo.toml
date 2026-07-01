@@ -7,3 +7,10 @@ edition = "2021"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.38", features = ["full"] }
+libsql = { version = "0.6.0", default-features = false, features = ["remote", "hrana", "core"] }
+lifeos-vcs = { path = "../lifeos-vcs" }
+ulid = "1.1"
+async-trait = "0.1"
+
+[dev-dependencies]
+tempfile = "3.27"

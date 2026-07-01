@@ -35,6 +35,29 @@ media file ──► route by MIME ──► extract TEXT ──► segment ─�
 
 **Query path:** "where I said X" → memvec matches a `segment` → return `t_start` + parent `asset` → deep-link to that exact timestamp/page.
 
+**Implemented (issue #88):** `services/lifeos-ingest` is the real orchestrator - MIME routing,
+job dispatch, segment-entity creation, and triggering memvec indexing, which is #88's actual
+scope (not the heavy extractors themselves). `lifeos-drain` claims an `ingest` job and calls
+`lifeos_ingest::process_ingest_job` directly as a library (both crates share this workspace,
+no subprocess). `route_by_mime` is real end-to-end for **plain text** (`.txt/.md/.markdown/
+.csv/.log/.json`): the blob is read via `lifeos_vcs::read_blob`, split into blank-line-
+separated paragraphs (`chunk_plain_text` - honest chunking, no fabricated NLP segmentation),
+each paragraph becomes a `type=segment` child entity (`attrs={text}`, `parent_id=<asset>`),
+and `Embedder::embed` fires per segment (a `SubprocessEmbedder` shelling out to
+`memvec.py embed`, or a logging `NoopEmbedder` when `LIFEOS_MEMVEC` is unset - see
+docs/MANUAL-SETUP.md §88). The parent entity's `attrs.transcript_ref` rollup (§5 below) is set
+to a fresh `lifeos_vcs::store_blob` of the full extracted text.
+
+Audio/video (**#89**, Whisper-class transcription) and image/PDF/docx (**#90**, vision-LLM
+captioning / OCR / pdfium text extraction) remain honest stubs: `route_by_mime` returns
+`Unsupported{kind, blocked_by}` naming the exact blocking issue - the same `blocked_by` strings
+`lifeos_vcs::diff::blocking_issue_for` already uses for those MIME classes (#85/#87), so a
+committed audio file reports the identical "blocked by #89" reasoning whether you ask
+`/api/vcs/diff` or `/api/ingest`. No segments are created for an unsupported kind; the parent
+entity's `attrs.ingest_status="unsupported"` + `attrs.ingest_blocked_by` record why, and an
+`ingest.unsupported` event is emitted - the job still completes (nothing to retry until #89/#90
+land), it just honestly produces zero segments rather than fabricating any.
+
 ---
 
 ## 3. Components (Rust-heavy)

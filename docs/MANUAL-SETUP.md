@@ -390,3 +390,36 @@ code paths against a local-filesystem `object_store` backend standing in for R2 
 no credentials needed for `cargo test`). One true end-to-end check once the bucket/token
 above are set: mirror a blob, delete it from the local CAS directory, confirm
 `pull_on_demand` fetches it back from the real bucket and the BLAKE3 hash still matches.
+
+### #88 - `lifeos-drain` env for semantic indexing of ingested segments (`LIFEOS_MEMVEC`, `LIFEOS_DERIVED_DB_PATH`)
+
+`services/lifeos-ingest` (docs/MEDIA-INTELLIGENCE.md) now routes `ingest` jobs by MIME type and
+creates real `segment` child entities for plain-text files. Two optional env vars, both read
+in `services/lifeos-drain/src/main.rs`, control whether those segments also get embedded for
+semantic search:
+
+```sh
+# Path to server/memvec.py. Without this set, lifeos-drain uses a no-op
+# embedder: segments are still created and lexically indexable (FTS5), just
+# not semantically searchable until the next boot rebuild or a manual
+# `memvec.py rebuild` picks them up. Degrades the same way routes/search.rs
+# already documents for query-time search.
+export LIFEOS_MEMVEC="/path/to/life-os/server/memvec.py"
+
+# Path to the un-synced derived DB memvec.py embeds into. Defaults to
+# "lifeos-derived.db" (same default lifeos-api uses) - only read when
+# LIFEOS_MEMVEC is set.
+export LIFEOS_DERIVED_DB_PATH="/path/to/life-os/lifeos-derived.db"
+```
+
+`LIFEOS_VCS_BLOB_ROOT` (already used by `lifeos-api`, §51 setup notwithstanding - it's the
+blob CAS root, default `lifeos-blobs`) must point at the same directory `lifeos-api` writes
+committed file bytes into, so `lifeos-drain` can read the blob it's ingesting.
+
+Audio/video transcription (#89) and image/PDF/docx captioning/OCR/text-extraction (#90) are
+still honest stubs: `lifeos-ingest` names the blocking issue on the parent entity's
+`attrs.ingest_blocked_by` rather than pretending to extract anything. One true end-to-end
+check once `LIFEOS_MEMVEC` is set: commit a `.txt` file via `POST /api/vcs/commit`, enqueue
+`POST /api/ingest {"entity_id": "<the file's id>"}`, run `lifeos-drain`, confirm `segment`
+child entities appear via `GET /api/entity?type=segment` and a `memvec.py query` for a phrase
+from the file returns one of them.

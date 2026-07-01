@@ -10,7 +10,12 @@
 //! directory `scaffold.js` lives in - set explicitly for a compiled binary
 //! whose cwd isn't the repo root, e.g. in the launchd plist),
 //! TELEGRAM_BOT_TOKEN (optional - without it, module-build notifications are
-//! logged locally instead of sent to Telegram).
+//! logged locally instead of sent to Telegram), LIFEOS_VCS_BLOB_ROOT (default
+//! `lifeos-blobs`, same env var `lifeos-api` uses for its blob store),
+//! LIFEOS_MEMVEC (optional path to `server/memvec.py` - without it, ingest
+//! still creates segments, just without semantic embedding),
+//! LIFEOS_DERIVED_DB_PATH (default `lifeos-derived.db`, only used when
+//! LIFEOS_MEMVEC is set).
 
 use libsql::Builder;
 use lifeos_drain::{
@@ -18,6 +23,7 @@ use lifeos_drain::{
     run_module_build, Dispatch, DrainConfig, NoopNotifier, Notifier, ScaffoldJsBuilder,
     TelegramNotifier,
 };
+use lifeos_ingest::{Embedder, IngestJobPayload, NoopEmbedder, SubprocessEmbedder};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 
@@ -68,9 +74,23 @@ async fn main() {
         }
     };
 
+    let vcs_blob_root = std::env::var("LIFEOS_VCS_BLOB_ROOT").unwrap_or_else(|_| "lifeos-blobs".to_string());
+    let vcs_store = lifeos_vcs::ObjectStore::new(vcs_blob_root);
+    let embedder: Box<dyn Embedder> = match std::env::var("LIFEOS_MEMVEC") {
+        Ok(memvec_path) if !memvec_path.is_empty() => {
+            let derived_db_path =
+                std::env::var("LIFEOS_DERIVED_DB_PATH").unwrap_or_else(|_| "lifeos-derived.db".to_string());
+            Box::new(SubprocessEmbedder { memvec_path, derived_db_path })
+        }
+        _ => {
+            println!("lifeos-drain: LIFEOS_MEMVEC not set, ingested segments won't be semantically embedded");
+            Box::new(NoopEmbedder)
+        }
+    };
+
     loop {
         match claim_job(&conn, &worker_id, now_secs(), cfg).await {
-            Ok(Some(job)) => run_job(&conn, &job, &worker_id).await,
+            Ok(Some(job)) => run_job(&conn, &job, &worker_id, &vcs_store, embedder.as_ref()).await,
             Ok(None) => {}
             Err(e) => eprintln!("lifeos-drain: claim failed: {e}"),
         }
@@ -91,12 +111,33 @@ async fn main() {
     }
 }
 
-async fn run_job(conn: &libsql::Connection, job: &lifeos_drain::ClaimedJob, worker_id: &str) {
+async fn run_job(
+    conn: &libsql::Connection,
+    job: &lifeos_drain::ClaimedJob,
+    worker_id: &str,
+    vcs_store: &lifeos_vcs::ObjectStore,
+    embedder: &dyn Embedder,
+) {
     println!("lifeos-drain: claimed {} (kind={})", job.id, job.kind);
     let result = match dispatch(&job.kind) {
         Dispatch::Stub(handler) => {
             println!("lifeos-drain: {} -> {handler} (stub, no-op this phase)", job.id);
             complete_job(conn, &job.id, worker_id).await
+        }
+        Dispatch::Ingest => {
+            let payload: IngestJobPayload = serde_json::from_str(&job.payload).unwrap_or_default();
+            match lifeos_ingest::process_ingest_job(conn, vcs_store, embedder, &job.workspace_id, payload, now_secs())
+                .await
+            {
+                Ok(outcome) => {
+                    println!("lifeos-drain: {} ingest -> {outcome:?}", job.id);
+                    complete_job(conn, &job.id, worker_id).await
+                }
+                Err(e) => {
+                    eprintln!("lifeos-drain: {} ingest failed: {e} - failing", job.id);
+                    fail_job(conn, &job.id, worker_id).await
+                }
+            }
         }
         Dispatch::Unknown => {
             eprintln!("lifeos-drain: unknown kind '{}' for {} - failing", job.kind, job.id);

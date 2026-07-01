@@ -1711,6 +1711,8 @@ version = "1.0.0"
 dependencies = [
  "async-trait",
  "libsql",
+ "lifeos-ingest",
+ "lifeos-vcs",
  "reqwest",
  "serde",
  "serde_json",
@@ -1722,9 +1724,14 @@ dependencies = [
 name = "lifeos-ingest"
 version = "1.0.0"
 dependencies = [
+ "async-trait",
+ "libsql",
+ "lifeos-vcs",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
+ "ulid",
 ]
 
 [[package]]
