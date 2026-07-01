@@ -1,6 +1,7 @@
 //! Shared, cheaply-cloneable application state handed to every handler.
 
 use crate::agents::DetectedAgent;
+use crate::browser::BrowserActuator;
 use crate::config::Config;
 use crate::kite::KiteClient;
 use crate::nango::NangoClient;
@@ -32,6 +33,12 @@ pub struct AppState {
     /// `/api/webhooks/whatsapp` surface NotImplemented rather than
     /// pretending. Deliberately has no send capability: see `whatsapp::WhatsAppClient`.
     pub whatsapp: Option<Arc<dyn WhatsAppClient>>,
+    /// Browser actuator process wrapper. `None` until
+    /// `BROWSER_ACTUATOR_SCRIPT` is configured (docs/MANUAL-SETUP.md #54) -
+    /// `/api/browser/*` and `/api/connections/browser/session` surface
+    /// NotImplemented rather than pretending. Deliberately has no method for
+    /// arbitrary state-changing actions: see `browser::BrowserActuator`.
+    pub browser: Option<Arc<dyn BrowserActuator>>,
 }
 
 impl AppState {

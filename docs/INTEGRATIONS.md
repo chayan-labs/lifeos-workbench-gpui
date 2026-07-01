@@ -66,15 +66,27 @@ per-provider code is missing, only the manual credential step in `docs/MANUAL-SE
 
 ---
 
-## 4. Browser actuator (browser-use / browser-harness)
+## 4. Browser actuator (browser-use)
 
 The universal outward actuator for services with **no API** (or where the API is too limited): the AI drives a real browser to publish, fill dashboards, scrape, book travel, operate any logged-in tool.
 
-- **Source:** fork `browser-use/browser-harness` (Python). Wrapped as a single gated `agentTool` `browser.act`.
-- **Where:** Mac-only (trusted), loaded on-demand via mcp-multiplexer, unloaded after.
+- **Source:** `external/browser-use` (Python, vendored as a git submodule of upstream `browser-use/browser-use`). Wrapped as `browser.act` (gated) + `browser.scrape` (free).
+- **Where:** Mac-only (trusted), invoked as a subprocess from `lifeos-api` per call - no long-lived MCP process to load/unload.
 - **Sessions/cookies:** stored encrypted exactly like `connections`; never in agent context.
 - **Gating:** **always human-gated for outward actions** - it can do anything a logged-in you can. Reads/scrapes are free; any state-changing action is draft → approve → execute.
 - **Pairing:** Nango (API providers) + browser actuator (everything else) = Life OS can integrate **literally any service**.
+
+**Implemented (issue #54):** `external/browser-use` is vendored as a git submodule (pinned, upstream `browser-use/browser-use`)
+and driven from `lifeos-api` via `services/lifeos-api/scripts/browser_actuator.py`
+(`src/browser.rs::ProcessBrowserActuator`, same `python3` subprocess pattern as the memvec search lane).
+`POST /api/browser/scrape` is free - the Python side runs with every state-changing action (`click`, `input`,
+`upload_file`, `send_keys`, `select_dropdown`, `write_file`, `replace_file`, `evaluate`) excluded from the agent's
+tool set entirely, so it cannot change external state even if instructed to. `POST /api/browser/act` is gated: it
+only ever creates a `pending_approval` draft entity (`services/lifeos-api/src/integrations.rs::draft_action`), which
+has no reference to the browser client at all. `POST /api/connections/browser/session` is the one interactive,
+Mac-only step - it opens a real headed browser for you to log in yourself, then envelope-encrypts the captured
+session (`crypto::encrypt`, the same key as Kite's `secret_encryption_key`) into `connections.secret_enc` with
+`provider = 'browser:<site>'` before it ever reaches the DB.
 
 ---
 

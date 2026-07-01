@@ -197,3 +197,57 @@ don't repurpose it for bulk outbound without understanding that risk.
    an `entities` row (`module='integrations', type='whatsapp_message'`)
    should appear. Confirm the GOWA Basic Auth credential never appears in
    any `/api/connections` response body.
+
+### #53 - Gmail / Calendar / Drive / Notion / Slack proxy tools
+
+No new code needed beyond #47/#48/#49's Nango setup - `/api/gmail/list`,
+`/api/calendar/list`, `/api/drive/list`, `/api/notion/list`, and
+`/api/slack/list` all proxy through the same self-hosted Nango deployment.
+Complete a `POST /api/connections/session {"provider": "google-mail"}` (and
+`google-calendar`/`google-drive`/`notion`/`slack`) connect flow for each
+provider you want reachable - `list` 404s until its connection is active.
+Gated writes (`gmail/send`, `calendar/create`, `drive/upload`,
+`notion/create`, `slack/post`) work with no connection at all, since they
+never call the provider.
+
+### #54 - Browser actuator (`external/browser-use`)
+
+The submodule at `external/browser-use` is already checked out (pinned
+commit, `.gitmodules`). Bringing up a real browser session needs you:
+
+1. **Install the Python side** (from `external/browser-use/`):
+   ```sh
+   uv sync --extra core   # or: pip install -e ".[core]"
+   uv run python -m playwright install chromium   # or: python3 -m playwright install chromium
+   ```
+
+2. **Set an LLM key for the browser agent's own reasoning** (separate from
+   any Claude Code key - browser-use runs its own agent loop):
+   ```sh
+   export ANTHROPIC_API_KEY=...   # or GOOGLE_API_KEY / OPENAI_API_KEY, matching scripts/browser_actuator.py's _llm()
+   ```
+
+3. **Set lifeos-api's env**: `BROWSER_ACTUATOR_SCRIPT` (path to
+   `services/lifeos-api/scripts/browser_actuator.py`) and
+   `LIFEOS_SECRET_ENCRYPTION_KEY` (reuse the same key generated for #51/#52
+   if already set - it covers browser sessions too). Until both are set,
+   `/api/browser/scrape` and `/api/connections/browser/session` return 501
+   (`/api/browser/act` always works - it only ever drafts, it needs no
+   actuator configured at all).
+
+4. **Smoke test the free path**:
+   `POST /api/browser/scrape {"url": "https://example.com", "task": "read the page title"}`
+   should run headless and return a result - no login needed.
+
+5. **Capture a session for a site that needs login** (optional):
+   `POST /api/connections/browser/session {"site": "example.com"}` opens a
+   real, visible Chromium window - log in yourself when it appears, then let
+   the agent finish. The captured session never appears in the response;
+   confirm no `secret_enc` field and no raw cookie value shows up in
+   `/api/connections`.
+
+**:warning: Read this before running any `act` you approve:** the browser
+actuator can do anything a logged-in you can on the sites it has a captured
+session for - it is `docs/SECURITY.md` §4's most powerful and most dangerous
+integration. Only approve drafted `browser.act` entities whose task string
+you've actually read.

@@ -4,6 +4,7 @@
 pub mod agents;
 pub mod audit;
 pub mod auth;
+pub mod browser;
 pub mod config;
 pub mod crypto;
 pub mod db;
@@ -18,12 +19,16 @@ pub mod routes;
 pub mod state;
 pub mod whatsapp;
 
+use crate::browser::{BrowserActuator, ProcessBrowserActuator};
 use crate::config::Config;
 use crate::kite::{HttpKiteClient, KiteClient};
 use crate::nango::{HttpNangoClient, NangoClient};
 use crate::state::AppState;
 use crate::whatsapp::{HttpWhatsAppClient, WhatsAppClient};
 use std::sync::Arc;
+
+/// Hard ceiling on a single browser-use subprocess invocation.
+const BROWSER_ACTUATOR_TIMEOUT_SECS: u64 = 300;
 
 fn nango_from_config(config: &Config) -> Option<Arc<dyn NangoClient>> {
     match (&config.nango_server_url, &config.nango_secret_key) {
@@ -48,43 +53,54 @@ fn whatsapp_from_config(config: &Config) -> Option<Arc<dyn WhatsAppClient>> {
     }
 }
 
+fn browser_from_config(config: &Config) -> Option<Arc<dyn BrowserActuator>> {
+    config
+        .browser_script_path
+        .as_ref()
+        .map(|path| Arc::new(ProcessBrowserActuator::new(path.clone(), BROWSER_ACTUATOR_TIMEOUT_SECS)) as Arc<dyn BrowserActuator>)
+}
+
 /// Open the DB, detect agents, and assemble shared state from a config.
-/// Wires the real HTTP Nango client, Kite client, and WhatsApp (GOWA)
-/// client whenever their respective config is present; `None` otherwise
-/// (routes then surface a clean NotImplemented - see docs/MANUAL-SETUP.md #47-52).
+/// Wires the real HTTP Nango client, Kite client, WhatsApp (GOWA) client,
+/// and browser actuator whenever their respective config is present; `None`
+/// otherwise (routes then surface a clean NotImplemented - see
+/// docs/MANUAL-SETUP.md #47-54).
 pub async fn build_state(config: Config) -> Result<AppState, libsql::Error> {
     let nango = nango_from_config(&config);
     let kite = kite_from_config(&config);
     let whatsapp = whatsapp_from_config(&config);
-    build_state_with_clients(config, nango, kite, whatsapp).await
+    let browser = browser_from_config(&config);
+    build_state_with_clients(config, nango, kite, whatsapp, browser).await
 }
 
 /// Same as `build_state`, but with an explicit Nango client (or `None`) -
 /// lets tests inject `nango::mock::MockNangoClient` instead of hitting a real
-/// deployment. Kite/WhatsApp clients are still wired from `config` if configured.
+/// deployment. Other clients are still wired from `config` if configured.
 pub async fn build_state_with_nango(
     config: Config,
     nango: Option<Arc<dyn NangoClient>>,
 ) -> Result<AppState, libsql::Error> {
     let kite = kite_from_config(&config);
     let whatsapp = whatsapp_from_config(&config);
-    build_state_with_clients(config, nango, kite, whatsapp).await
+    let browser = browser_from_config(&config);
+    build_state_with_clients(config, nango, kite, whatsapp, browser).await
 }
 
 /// Same as `build_state`, but with an explicit Kite client (or `None`) - lets
-/// tests inject `kite::mock::MockKiteClient`. Nango/WhatsApp clients are
-/// still wired from `config` if configured.
+/// tests inject `kite::mock::MockKiteClient`. Other clients are still wired
+/// from `config` if configured.
 pub async fn build_state_with_kite(
     config: Config,
     kite: Option<Arc<dyn KiteClient>>,
 ) -> Result<AppState, libsql::Error> {
     let nango = nango_from_config(&config);
     let whatsapp = whatsapp_from_config(&config);
-    build_state_with_clients(config, nango, kite, whatsapp).await
+    let browser = browser_from_config(&config);
+    build_state_with_clients(config, nango, kite, whatsapp, browser).await
 }
 
 /// Same as `build_state`, but with an explicit WhatsApp client (or `None`) -
-/// lets tests inject `whatsapp::mock::MockWhatsAppClient`. Nango/Kite clients
+/// lets tests inject `whatsapp::mock::MockWhatsAppClient`. Other clients
 /// are still wired from `config` if configured.
 pub async fn build_state_with_whatsapp(
     config: Config,
@@ -92,7 +108,21 @@ pub async fn build_state_with_whatsapp(
 ) -> Result<AppState, libsql::Error> {
     let nango = nango_from_config(&config);
     let kite = kite_from_config(&config);
-    build_state_with_clients(config, nango, kite, whatsapp).await
+    let browser = browser_from_config(&config);
+    build_state_with_clients(config, nango, kite, whatsapp, browser).await
+}
+
+/// Same as `build_state`, but with an explicit browser actuator (or `None`)
+/// - lets tests inject `browser::mock::MockBrowserActuator`. Other clients
+/// are still wired from `config` if configured.
+pub async fn build_state_with_browser(
+    config: Config,
+    browser: Option<Arc<dyn BrowserActuator>>,
+) -> Result<AppState, libsql::Error> {
+    let nango = nango_from_config(&config);
+    let kite = kite_from_config(&config);
+    let whatsapp = whatsapp_from_config(&config);
+    build_state_with_clients(config, nango, kite, whatsapp, browser).await
 }
 
 async fn build_state_with_clients(
@@ -100,6 +130,7 @@ async fn build_state_with_clients(
     nango: Option<Arc<dyn NangoClient>>,
     kite: Option<Arc<dyn KiteClient>>,
     whatsapp: Option<Arc<dyn WhatsAppClient>>,
+    browser: Option<Arc<dyn BrowserActuator>>,
 ) -> Result<AppState, libsql::Error> {
     let db = db::connect(&config).await?;
     let agents = agents::detect();
@@ -111,5 +142,6 @@ async fn build_state_with_clients(
         nango,
         kite,
         whatsapp,
+        browser,
     })
 }

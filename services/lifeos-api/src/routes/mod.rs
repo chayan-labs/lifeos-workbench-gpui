@@ -1,5 +1,6 @@
 //! HTTP surface for `lifeos-api`. One handler module per resource group.
 
+mod browser;
 mod calendar;
 mod connection;
 mod drive;
@@ -81,6 +82,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/notion/create", post(notion::create))
         .route("/api/slack/list", get(slack::list))
         .route("/api/slack/post", post(slack::post))
+        // --- browser actuator: free read-only scrape, gated act, one
+        //     interactive session-capture route (issue #54) ---
+        .route("/api/browser/scrape", post(browser::scrape))
+        .route("/api/browser/act", post(browser::act))
+        .route("/api/connections/browser/session", post(browser::session))
         // --- SSE: module lifecycle events for hot-reload tabs (no polling) ---
         .route("/api/stream/modules", get(stream::modules))
         // --- local agent router (OpenDesign-style) ---

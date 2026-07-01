@@ -222,6 +222,7 @@ mod tests {
             gowa_base_url: None,
             gowa_basic_auth: None,
             gowa_webhook_secret: None,
+            browser_script_path: None,
         }
     }
 

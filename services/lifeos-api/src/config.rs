@@ -62,6 +62,11 @@ pub struct Config {
     /// `/api/webhooks/whatsapp` calls - must match GOWA's own
     /// `WHATSAPP_WEBHOOK_SECRET` (infra/gowa/.env).
     pub gowa_webhook_secret: Option<String>,
+    /// Path to `scripts/browser_actuator.py`, the thin CLI over the vendored
+    /// `external/browser-use` submodule (docs/MANUAL-SETUP.md #54). `None`
+    /// means `/api/browser/*` and `/api/connections/browser/session` return
+    /// NotImplemented rather than pretending a browser actuator is wired up.
+    pub browser_script_path: Option<String>,
 }
 
 impl Config {
@@ -117,6 +122,8 @@ impl Config {
         let gowa_basic_auth = std::env::var("GOWA_BASIC_AUTH").ok().filter(|s| !s.is_empty());
         let gowa_webhook_secret = std::env::var("GOWA_WEBHOOK_SECRET").ok().filter(|s| !s.is_empty());
 
+        let browser_script_path = std::env::var("BROWSER_ACTUATOR_SCRIPT").ok().filter(|s| !s.is_empty());
+
         Self {
             db_path,
             turso_url,
@@ -135,6 +142,7 @@ impl Config {
             gowa_base_url,
             gowa_basic_auth,
             gowa_webhook_secret,
+            browser_script_path,
         }
     }
 }

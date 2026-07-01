@@ -50,6 +50,7 @@ async fn test_app() -> TestApp {
     gowa_base_url: None,
     gowa_basic_auth: None,
     gowa_webhook_secret: None,
+    browser_script_path: None,
     };
     let state = build_state(config).await.expect("build state");
     TestApp {

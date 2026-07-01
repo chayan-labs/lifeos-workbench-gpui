@@ -55,6 +55,7 @@ async fn test_app(with_kite: bool) -> TestApp {
         gowa_base_url: None,
         gowa_basic_auth: None,
         gowa_webhook_secret: None,
+        browser_script_path: None,
     };
     let kite = Arc::new(MockKiteClient::new());
     let state = build_state_with_kite(config, if with_kite { Some(kite.clone()) } else { None })

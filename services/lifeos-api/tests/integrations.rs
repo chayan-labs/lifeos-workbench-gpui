@@ -50,6 +50,7 @@ async fn test_app(with_nango: bool) -> TestApp {
         gowa_base_url: None,
         gowa_basic_auth: None,
         gowa_webhook_secret: None,
+        browser_script_path: None,
     };
     let nango = Arc::new(MockNangoClient::new());
     let state = build_state_with_nango(config, if with_nango { Some(nango.clone()) } else { None })

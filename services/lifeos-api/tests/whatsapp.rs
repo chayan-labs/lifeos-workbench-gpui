@@ -59,6 +59,7 @@ async fn test_app(with_whatsapp: bool) -> TestApp {
         gowa_base_url: with_whatsapp.then(|| "http://127.0.0.1:0".to_string()),
         gowa_basic_auth: with_whatsapp.then(|| "lifeos:test-pass".to_string()),
         gowa_webhook_secret: with_whatsapp.then(|| WEBHOOK_SECRET.to_string()),
+        browser_script_path: None,
     };
     let whatsapp = Arc::new(MockWhatsAppClient::new());
     let state = build_state_with_whatsapp(config, if with_whatsapp { Some(whatsapp.clone()) } else { None })
