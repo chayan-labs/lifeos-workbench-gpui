@@ -169,12 +169,15 @@ Any tier queries the FTS5 + sqlite-vec hybrid (RRF) over `lifeos-derived.db`; th
 
 ```
 life-os/
-  index.html                 # SPA shell; loads core/ then each enabled module's module.js
-  core/                       # generalized knowledge-atlas + Refine integration
-    registry.js db.js auth.js router.js render.js graph.js search.js command.js analytics.js
-    views/ list.js board.js table.js calendar.js detail.js graph.js gallery.js timeline.js map.js
-    annotations.js intelligence.js palette.css styles.css
-  modules/                    # one declarative manifest per domain
+  frontend/                   # React + Vite SPA - the implemented UI (supersedes the
+    index.html                #   original vanilla `core/` prototype, now removed)
+    src/
+      main.jsx App.jsx        # entry + React Router routes
+      index.css               # Neo-Brutalist design tokens (Tailwind v4 `@theme`)
+      components/ pages/       # shell (Layout, AIConsole, CommandBar) + route pages
+      core/                   # generic renderers (list/board/table/calendar/gallery/…)
+      lib/                    # api client, module registry/manifests, ai, vcs
+  modules/                    # one declarative manifest per domain (scaffold layer)
     learning/ tasks/ projects/ trading/ social/ marketing/ design/
     email/ calendar/ files/ notion/ slack/ reading/ travel/
     _template/                # scaffold skeleton for self-extension

@@ -17,8 +17,8 @@ Read `docs/ARCHITECTURE.md`, `docs/DATA-MODEL.md`, `docs/AGENT-CONTROL.md`, and 
 - **API Explorer is real and wired:** `APIExplorer.jsx` (embedded in `/integrations`) reads `API_ROUTES`, pings GET routes, and "tries" any route with its sample payload. It is the one surface that already exercises the whole API.
 - **Almost everything else is showcase:** Dashboard KPIs, the jobs queue, the harness telemetry table, the agent registry, the self-extension terminal, the ingest clips, and the integrations list are all hardcoded constants or `localStorage`, not backend data.
 
-The legacy `core/` IIFE layer (`core/db.js`, `core/auth.js`, …) is **not** imported by Vite.
-It is the pre-React prototype, but `core/db.js` is the *correct reference* for tenant headers - the React `apiCall` must adopt its pattern (see P0).
+The legacy `core/` IIFE layer (the pre-React prototype) has been **removed**.
+The React `apiCall` in `src/lib/api.js` now owns the tenant-header pattern it used to reference (see P0, done).
 
 ---
 
@@ -30,7 +30,7 @@ Nothing else can be trusted until every request carries the workspace and (optio
 1. `apiCall(method, path, body)` in `src/lib/api.js` attaches, on every request:
    - `X-Workspace-Id: <workspace_id>` read from `localStorage['life_os_workspace_id']` (fallback `default-personal-workspace`).
    - `Authorization: Bearer <key_token>` when `localStorage['life_os_key_token']` is set.
-   - Mirrors `core/db.js`'s header shape so the two clients agree.
+   - Uses the tenant-header shape the removed `core/db.js` prototype defined, now owned by `lib/api.js`.
 2. `key_token` is persisted under the canonical key `life_os_key_token` (exported as `KEY_TOKEN_KEY` from `lib/api.js`) both on `POST /api/register` success and on a matched-registered-user login; the demo identity (`chayan@lifeos.app`) clears it, since it has no backend-minted token.
 3. The three raw-`fetch` call sites now go through `apiCall`: the health check and entity POST in `Database.jsx`, and the register call in `LoginPage.jsx`.
 4. **Auth model decision: soft auth, kept as-is.** There is no `/api/login` on the backend and none is being added. `POST /api/register` is the only place a `key_token` (an HS256 JWT, see `services/lifeos-api/src/auth.rs::issue_token`) is minted; the React "login" form either accepts the hardcoded demo identity or validates an email/key pair against `localStorage['life_os_registered_users']` entirely client-side, then promotes that user's `key_token` to the canonical `life_os_key_token` slot apiCall reads. The backend independently verifies the JWT on every request that carries it (`resolve_workspace`: verified JWT claim > `X-Workspace-Id` header > body param > seeded default) - so client-side "login" never grants tenant access by itself, it only selects which already-issued token gets attached.
@@ -82,7 +82,7 @@ This is what makes a new module render with zero bespoke UI.
 - Adopt **Refine** with a custom `dataProvider` over the generic-entity API (`GET/POST /api/entity`, `PATCH /api/entity/:id`, `GET /api/edge`).
 - Build the generic view renderers, each reading `entityTypes.display` from the manifest: **list, board (Kanban), table, calendar, detail, gallery, timeline, map**.
 - Build the **graph view** with Cytoscape over `GET /api/edge`.
-- Add a React module registry mirroring `core/registry.js`: register manifests, listen for `module-mounted:<id>` to hot-add a module tab without reload (SSE from the self-extension builder).
+- Add a React module registry (`lib/moduleRegistry.js`, implementing the old `osRegisterModule` contract): register manifests, listen for `module-mounted:<id>` to hot-add a module tab without reload (SSE from the self-extension builder).
 
 Until the generic renderers exist, the existing per-module screens stay as fallbacks, but new modules must not require new screens.
 

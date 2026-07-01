@@ -1,7 +1,7 @@
 # Modules - the plugin system
 
 Every domain in Life OS is a **declarative module** - a manifest that says *what data exists* and *how to render it*, never DOM/router/DB code.
-Rendering lives in reused `core/`.
+Rendering lives in the React SPA under `frontend/` (generic renderers in `frontend/src/core/`).
 **Adding a module = a manifest + (rarely) one generated column. No bespoke table, ever.**
 
 ---
@@ -39,7 +39,7 @@ osRegisterModule({
 });
 ```
 
-A module is loaded by the SPA shell after `core/`; the self-extension builder writes new ones; the marketplace distributes them.
+A module manifest is consumed by the React SPA (`frontend/`); the self-extension builder writes new ones; the marketplace distributes them.
 
 ### View kinds (rendered generically from `entityTypes.display` + `views`)
 `list` · `board` (Kanban) · `table` · `calendar` · `detail` · `graph` (Cytoscape) · `gallery` · `timeline` · `map`.

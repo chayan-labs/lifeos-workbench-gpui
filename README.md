@@ -196,10 +196,10 @@ One local `lifeos` API (extending the atlas's zero-dep Node server; FastAPI acce
 
 ## 8. Interface
 
-A generalization of the `knowledge-atlas` SPA (vanilla-JS, no-build, offline-capable) into a multi-module shell, with a **light, minimalist, more polished** palette.
+A generalization of the `knowledge-atlas` SPA into a multi-module shell. **Implemented as a React + Vite SPA under `frontend/`** (the original plan called for a vanilla-JS no-build `core/`; that prototype was superseded and removed - see `frontend/FRONTEND.md` for the authoritative status).
 
-- **Reuse:** `app.js` (router, SVG cross-module graph, markdown engine, search), `annotations.js`, `intelligence.js`, `styles.css` (retinted), `tools/server.js`, `tools/memory.js`.
-- **New:** `core/registry.js` (`osRegisterModule`), `core/db.js` (libSQL + replica sync + workspace context), `core/auth.js` (session/workspace; no-op locally, real in SaaS), `core/views/{list,board,table,calendar,detail,graph,gallery}.js`, `core/palette.css`, the seven manifests, `server/{bot,sync,scaffold,db,oauth}.js`.
+- **Reuse (concepts carried over):** the atlas router, SVG cross-module graph, markdown engine, search, `annotations`, `intelligence`.
+- **Implemented in `frontend/src/`:** `lib/moduleRegistry.js` (`osRegisterModule` contract) + `lib/moduleManifests.js`, `lib/db`/`lib/api.js` (libSQL + workspace context), soft auth, `core/renderers/{list,board,table,calendar,detail,graph,gallery,timeline,map}.jsx`, `index.css` design tokens, the seven manifests; plus `server/{scaffold,…}.js` for self-extension.
 
 Each module renders generically from its manifest's `views` + `entityTypes.display`: a trade → journal table + equity calendar; a task → Kanban board; a topic → atlas article + connection chips; a design asset → gallery; a campaign → calendar/funnel - all from the same `entities`/`edges` rows. You get cross-domain edges, one search index, one event log, and one graph across every module for free.
 
@@ -209,11 +209,13 @@ Each module renders generically from its manifest's `views` + `entityTypes.displ
 
 ```
 life-os/
-  index.html                 # shell; loads core/ then each enabled module's module.js
-  core/
-    registry.js db.js auth.js router.js render.js graph.js search.js
-    views/ list.js board.js table.js calendar.js detail.js graph.js gallery.js
-    annotations.js intelligence.js palette.css styles.css
+  frontend/                  # React + Vite SPA - the implemented UI (supersedes the
+    index.html               #   original vanilla `core/` prototype, now removed)
+    src/ main.jsx App.jsx    #   entry + React Router routes
+      components/ pages/      #   shell (Layout, AIConsole, CommandBar) + route pages
+      core/renderers/         #   generic list/board/table/calendar/gallery/… views
+      lib/                    #   api client, module registry/manifests, ai, vcs
+      index.css               #   Neo-Brutalist design tokens (Tailwind v4 @theme)
   modules/
     learning/  module.js data/01_dsa.js … 13_gpu.js   # migrated atlas data
     tasks/     module.js

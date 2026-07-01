@@ -6,6 +6,27 @@
    (v4 defaults dark: to prefers-color-scheme, which ignores the class). */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Register the neo palette as Tailwind color tokens so `bg-neo-*`, `text-neo-*`,
+   `border-neo-*` utilities generate. `@theme inline` emits the utility as
+   `var(--neo-*)` (not the resolved value), so the `:root.dark` overrides below
+   keep working at runtime. Without this block these utilities are no-ops and
+   every colored button/badge/nav-highlight renders unstyled. */
+@theme inline {
+	--color-neo-bg: var(--neo-bg);
+	--color-neo-surface: var(--neo-surface);
+	--color-neo-surface-muted: var(--neo-surface-muted);
+	--color-neo-surface-high: var(--neo-surface-high);
+	--color-neo-surface-variant: var(--neo-surface-variant);
+	--color-neo-text: var(--neo-text);
+	--color-neo-text-muted: var(--neo-text-muted);
+	--color-neo-border: var(--neo-border);
+	--color-neo-yellow: var(--neo-yellow);
+	--color-neo-blue: var(--neo-blue);
+	--color-neo-blue-bright: var(--neo-blue-bright);
+	--color-neo-red: var(--neo-red);
+	--color-neo-mint: var(--neo-mint);
+}
+
 /* Bind prose (markdown) colors to the neo theme tokens so rendered articles
    stay readable in both light and dark mode. */
 .prose {

@@ -67,7 +67,7 @@ A module is already a validated, self-contained manifest ([SELF-EXTENSION.md](./
 
 - The SPA + `manifest.webmanifest` + a **service worker** (offline cache of `core/` + the embedded-replica read model) + **Web Push**.
 - Telegram stays for quick capture/approve; the PWA is the full-fidelity surface (galleries, dashboards, version diffs, maps, timelines).
-- **Auth:** `core/auth.js` real path (session + workspace) - no-op locally, real for SaaS.
+- **Auth:** `frontend/src/lib` auth path (session + workspace) - no-op locally, real for SaaS.
 - **Offline:** reads from a local cache / IndexedDB mirror; writes spool to `store/` and reconcile via the single-writer + events-as-truth model ([DATA-MODEL.md](./DATA-MODEL.md) §4).
 - **Build:** JS/PWA; the Worker serves push.
 
