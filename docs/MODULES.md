@@ -62,6 +62,10 @@ The knowledge-atlas generalized to *any subject*.
 - **Tools:** `learn.add_topic`, `learn.quiz` (examiner/teach-back), `learn.recall` (memvec).
 - **Bot:** `add topic`, `quiz me`, `what's due`.
 - **Migration:** atlas data files (`01_dsa.js … 13_gpu.js`) wrapped via an `atlasAdd → osRegisterModule` shim.
+- **Implemented (issue #65):** `/topic <text>` (`worker/src/commands.ts::captureTopic`) captures a
+  `learning`/`topic` entity with no status, so it also surfaces via `/inbox` until triaged.
+  `/quiz` picks the topic untouched the longest (naive - no SM-2 scheduling yet, same
+  naive-but-real precedent as `reading.rs`'s extraction). See `docs/PLATFORM-SYSTEMS.md`.
 
 ### 2.2 Tasks / Productivity
 - **Entity types:** `task`, `project`, `schedule_block`.
@@ -71,6 +75,11 @@ The knowledge-atlas generalized to *any subject*.
 - **Views:** board (Kanban), list ("today"), calendar.
 - **Tools:** `task.create`, `task.complete`, `task.today`.
 - **Bot:** `/task`, `/done`, `/today`.
+- **Implemented (issue #65):** `worker/src/commands.ts::captureTask`/`markDone`/`today`.
+  `/today` returns open tasks with no due date or due on/before today (UTC day boundary) -
+  no natural-language due-date parsing on capture yet, so most tasks are undated until the
+  SPA/API sets `attrs.due`. `/done <id-suffix>` matches the tail of a task's id (shown in
+  `/task`'s and `/today`'s replies), since a full ULID isn't practical to retype on a phone.
 
 ### 2.3 Coding / Projects
 Seeded from a git scan of the ~27 repos in `04_Projects`.
@@ -92,6 +101,11 @@ Seeded from a git scan of the ~27 repos in `04_Projects`.
 - **Tools:** `trade.log_plan`, `trade.close`, `trade.pnl` - **all read/log only**.
 - **HARD CONSTRAINT:** broker is **read-only for any agent/bot**. No order tool registered anywhere. `proposed_order` entity → Telegram approve → a **separate interactive `trade-exec`** (never agent/hook/cron-callable, typed confirmation). `broker-guard` PreToolUse hook fails closed on place/modify/cancel/GTT. See [SECURITY.md](./SECURITY.md).
 - **Bot:** `/buy` (logs a *planned* trade), `/close`, `/pnl`.
+- **Implemented (issue #65):** `/pnl` (`worker/src/commands.ts::pnl`, `worker/src/events.ts`)
+  sums `attrs.pnl` across every `trade.closed` event for the workspace - a pure read over
+  `events`, never a broker call, consistent with the read-only hard constraint above.
+  `/buy`/`/close` (logging planned/closed trades) are deferred - not yet needed to exercise
+  the read path, and better scoped alongside a real trade-logging flow later.
 
 ### 2.5 Social (multi-account, owned OAuth via Nango)
 - **Entity types:** `social_account`, `post`, `reply`, `dm`, `mention`, `thread`.

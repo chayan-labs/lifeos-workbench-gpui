@@ -49,6 +49,18 @@ metrics: [
 - Built from a scheduled `jobs` row → query over `events`/`entities` → send via the bot.
 - PWA push (§5) mirrors the same digest.
 
+**Implemented (issue #65):** the pieces this digest will eventually assemble already exist
+as standalone Telegram commands - `worker/src/commands.ts`: `/today` (due today), `/pnl`
+(realized PnL), `/inbox` (uncategorized captures - status IS NULL, closest analog to
+"what's blocked" until a `task.blocked` event exists), `/draft` (creates a
+`pending_approval` entity, "drafts awaiting approval"). No scheduled digest job yet - that's
+a `jobs`-row + cron trigger, deferred until the heavy-job enqueue path (#67) exists to model
+it on. `/task`/`/topic`/`/done`/`/quiz` are capture/complete/quiz commands, not digest
+inputs - see `docs/MODULES.md` §2.1/§2.2/§2.4 for their module-specific notes. Every command
+is workspace-scoped (`worker/src/db.ts::resolveWorkspaceId`, #64) and reads/writes only via
+`entities.ts`/`events.ts`, never a direct query - tested against a real in-memory libSQL DB,
+`worker/test/{entities,events,commands,bot}.test.ts`.
+
 ---
 
 ## 4. Module marketplace (the SaaS seam)

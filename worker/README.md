@@ -5,11 +5,18 @@ and, later, OAuth callbacks. See `docs/ARCHITECTURE.md` §3.1 and `docs/BUILD-PL
 
 - Issue #63: bot scaffold, `/start` and `/health` commands.
 - Issue #64: `src/db.ts` (workspace-scoped `@lifeos/db/client/worker` binding) and
-  `src/llm.ts` (Haiku via `@anthropic-ai/sdk`) - tested (in-memory libSQL, stubbed
-  `fetch`) but not yet wired into a bot command.
+  `src/llm.ts` (Haiku via `@anthropic-ai/sdk`).
+- Issue #65: capture/query commands (`src/commands.ts`), wired into the bot:
+  - `/task <text>`, `/topic <text>` - capture into `tasks`/`learning`.
+  - `/done <id-suffix>` - completes a task by the tail of its id (shown in `/task`'s and
+    `/today`'s replies).
+  - `/today` - open tasks due today or undated.
+  - `/inbox` - captures with no status yet (e.g. a fresh `/topic`).
+  - `/pnl` - realized PnL summed from `trade.closed` events (read-only, never a broker call).
+  - `/quiz` - spaced-repetition-style prompt, naive (oldest-untouched topic).
+  - `/draft <text>` - creates a `pending_approval` entity; never publishes anything itself.
 
-Capture/query commands, gated approve/deny keyboards, and the heavy-job enqueue path land
-in #65-67.
+Gated approve/deny keyboards and the heavy-job enqueue path land in #66-67.
 
 Every DB query in `src/entities.ts` filters by `workspace_id`, resolved server-side from
 `env.WORKSPACE_ID` (never from Telegram input) via `resolveWorkspaceId()` in `src/db.ts`.

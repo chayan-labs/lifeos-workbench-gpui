@@ -1,15 +1,14 @@
-// Cloudflare Worker entrypoint - issue #63 (docs/ARCHITECTURE.md §3.1).
+// Cloudflare Worker entrypoint - issues #63-65 (docs/ARCHITECTURE.md §3.1).
 // Routes Telegram's webhook POSTs into grammY via the native Workers
 // adapter (`webhookCallback(bot, "cloudflare-mod")`); everything else is a
 // bare liveness check for `wrangler deploy` smoke-testing.
 import { webhookCallback } from "grammy";
 import { createBot } from "./bot.js";
+import { createDb, resolveWorkspaceId } from "./db.js";
 
 export interface Env {
   BOT_TOKEN: string;
-  // DB + Haiku bindings (issue #64) - unused by fetch() until #65 wires
-  // capture/query commands, but declared here so wrangler.toml's secrets
-  // line up with what db.ts/llm.ts expect.
+  // DB + Haiku bindings (issues #64/#65).
   TURSO_URL: string;
   TURSO_TOKEN: string;
   ANTHROPIC_API_KEY: string;
@@ -25,7 +24,9 @@ export default {
     }
 
     if (url.pathname === "/telegram" && request.method === "POST") {
-      const bot = createBot(env.BOT_TOKEN);
+      const db = createDb(env);
+      const workspaceId = resolveWorkspaceId(env);
+      const bot = createBot({ token: env.BOT_TOKEN, db, workspaceId });
       const handleUpdate = webhookCallback(bot, "cloudflare-mod");
       return handleUpdate(request);
     }

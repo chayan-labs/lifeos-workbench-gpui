@@ -1,45 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { createLocalDb, type LocalDb } from "@lifeos/db/client/local";
-import { sql } from "@lifeos/db/query";
-import { createEntity, listEntities } from "../src/entities.js";
-
-// migrations/0001_core.sql's `entities`/`workspaces` DDL, trimmed to what
-// these tests touch - a real in-memory SQLite DB via @lifeos/db's own
-// drizzle-orm instance (see db/client.local.ts), not a mock.
-const SCHEMA_SQL = `
-CREATE TABLE workspaces (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  plan TEXT DEFAULT 'free',
-  limits TEXT NOT NULL DEFAULT '{}',
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
-CREATE TABLE entities (
-  id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL,
-  module TEXT NOT NULL,
-  type TEXT NOT NULL,
-  parent_id TEXT,
-  title TEXT,
-  status TEXT,
-  tier TEXT,
-  attrs TEXT NOT NULL DEFAULT '{}',
-  source TEXT,
-  blob_ref TEXT,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  due INTEGER GENERATED ALWAYS AS (json_extract(attrs, '$.due')) VIRTUAL
-);
-`;
+import type { LocalDb } from "@lifeos/db/client/local";
+import { createEntity, listEntities, listInbox, listOpenTasksDueBy, markTaskDoneBySuffix } from "../src/entities.js";
+import { createTestDb } from "./testDb.js";
 
 let db: LocalDb;
 
 beforeEach(async () => {
-  db = createLocalDb("file::memory:");
-  for (const stmt of SCHEMA_SQL.split(";").map((s) => s.trim()).filter(Boolean)) {
-    await db.run(sql.raw(stmt));
-  }
+  db = await createTestDb();
 });
 
 describe("createEntity + listEntities", () => {
@@ -75,5 +42,67 @@ describe("createEntity + listEntities", () => {
     expect(rowsForA[0].title).toBe("a's task");
     expect(rowsForB).toHaveLength(1);
     expect(rowsForB[0].title).toBe("b's task");
+  });
+});
+
+describe("listOpenTasksDueBy", () => {
+  it("includes undated open tasks and excludes tasks due after the cutoff", async () => {
+    await createEntity(db, "ws_a", { module: "tasks", type: "task", title: "no due date", status: "open" });
+    await createEntity(db, "ws_a", { module: "tasks", type: "task", title: "due later", status: "open", attrs: { due: 2_000_000_000 } });
+    await createEntity(db, "ws_a", { module: "tasks", type: "task", title: "done already", status: "done" });
+
+    const rows = await listOpenTasksDueBy(db, "ws_a", 1_000_000_000);
+
+    expect(rows.map((r) => r.title)).toEqual(["no due date"]);
+  });
+
+  it("sorts dated tasks before undated ones", async () => {
+    await createEntity(db, "ws_a", { module: "tasks", type: "task", title: "no due date", status: "open" });
+    await createEntity(db, "ws_a", { module: "tasks", type: "task", title: "due soon", status: "open", attrs: { due: 100 } });
+
+    const rows = await listOpenTasksDueBy(db, "ws_a", 1_000_000_000);
+
+    expect(rows.map((r) => r.title)).toEqual(["due soon", "no due date"]);
+  });
+});
+
+describe("listInbox", () => {
+  it("returns only entities with no status, most recent first", async () => {
+    await createEntity(db, "ws_a", { module: "tasks", type: "task", title: "triaged", status: "open" });
+    await createEntity(db, "ws_a", { module: "learning", type: "topic", title: "raw capture" });
+
+    const rows = await listInbox(db, "ws_a");
+
+    expect(rows.map((r) => r.title)).toEqual(["raw capture"]);
+  });
+});
+
+describe("markTaskDoneBySuffix", () => {
+  it("marks the matching open task done", async () => {
+    const created = await createEntity(db, "ws_a", { module: "tasks", type: "task", title: "ship it", status: "open" });
+    const suffix = created.id.slice(-6);
+
+    const result = await markTaskDoneBySuffix(db, "ws_a", suffix);
+
+    expect(result.outcome).toBe("done");
+    const rows = await listEntities(db, "ws_a", { module: "tasks", type: "task" });
+    expect(rows[0].status).toBe("done");
+  });
+
+  it("reports not_found for no match", async () => {
+    const result = await markTaskDoneBySuffix(db, "ws_a", "zzzzzz");
+    expect(result.outcome).toBe("not_found");
+  });
+
+  it("reports ambiguous when a suffix matches more than one open task", async () => {
+    await createEntity(db, "ws_a", { module: "tasks", type: "task", title: "first", status: "open" });
+    await createEntity(db, "ws_a", { module: "tasks", type: "task", title: "second", status: "open" });
+
+    // An empty suffix trivially matches every id (String.endsWith("") is
+    // always true) - a deterministic way to force the multi-match branch
+    // without relying on two random ULIDs sharing a real tail.
+    const result = await markTaskDoneBySuffix(db, "ws_a", "");
+
+    expect(result.outcome).toBe("ambiguous");
   });
 });
