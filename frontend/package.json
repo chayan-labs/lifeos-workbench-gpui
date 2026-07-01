@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@nangohq/frontend": "^0.70.9",
     "@refinedev/core": "^5.0.12",
     "@tailwindcss/vite": "^4.3.0",
     "cytoscape": "^3.34.0",

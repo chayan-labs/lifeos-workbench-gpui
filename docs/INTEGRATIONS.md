@@ -54,6 +54,15 @@ only ever creates a `pending_approval` draft entity - the handler has no code pa
 Each `list` 404s until its provider's OAuth app is registered (#48/#49) and a connection is completed - no
 per-provider code is missing, only the manual credential step in `docs/MANUAL-SETUP.md`.
 
+**Implemented (issue #55):** the `/integrations` page (`frontend/src/pages/Integrations.jsx`) is a real client of
+`GET /api/connections` - no more mock provider list. "Add Connection" calls `POST /api/connections/session`, opens
+Nango's self-hosted Connect UI via the official `@nangohq/frontend` SDK (`nango.openConnectUI({baseURL:
+VITE_NANGO_CONNECT_URL, ...})`, default `http://localhost:3009`), and on a `connect` event calls
+`POST /api/connections/complete` to record the connection. Disconnect calls `DELETE /api/connections/:id`. Native
+connectors (Kite, WhatsApp, browser sessions) land in the same `connections` table and list read-only alongside
+Nango connections; their own multi-step connect flows (daily login-url, QR scan, headed-browser capture) are
+unchanged and out of scope for this generic modal.
+
 ---
 
 ## 3. Nango details

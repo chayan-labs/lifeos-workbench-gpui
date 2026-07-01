@@ -6,6 +6,10 @@
 export const API_BASE =
   (import.meta.env && import.meta.env.VITE_API_URL) || 'http://127.0.0.1:8080';
 
+// Self-hosted Nango Connect UI (infra/nango/docker-compose.yml CONNECT_UI_PORT).
+export const NANGO_CONNECT_UI_URL =
+  (import.meta.env && import.meta.env.VITE_NANGO_CONNECT_URL) || 'http://localhost:3009';
+
 // Canonical localStorage keys for tenant + soft-auth state. See FRONTEND.md §1.
 export const WORKSPACE_ID_KEY = 'life_os_workspace_id';
 export const KEY_TOKEN_KEY = 'life_os_key_token';
@@ -158,6 +162,38 @@ export const API_ROUTES = [
     status: 'live',
     summary: 'Route a prompt to a local agent CLI (Claude Code / Gemini / ...) and return { text }.',
     sample: { system: 'You are a study assistant.', prompt: 'Explain CAP theorem.' },
+  },
+  {
+    service: 'lifeos-api',
+    method: 'GET',
+    path: '/api/connections',
+    status: 'live',
+    summary: 'List owned-credential connections (provider, handle, status). Never returns a token.',
+    sample: null,
+  },
+  {
+    service: 'lifeos-api',
+    method: 'POST',
+    path: '/api/connections/session',
+    status: 'live',
+    summary: "Mint a Nango Connect session token to run a provider's OAuth dance.",
+    sample: { provider: 'google-mail' },
+  },
+  {
+    service: 'lifeos-api',
+    method: 'POST',
+    path: '/api/connections/complete',
+    status: 'live',
+    summary: 'Record a connection after the Nango Connect UI reports success.',
+    sample: { connection_id: 'con_x_091', provider: 'google-mail' },
+  },
+  {
+    service: 'lifeos-api',
+    method: 'DELETE',
+    path: '/api/connections/:id',
+    status: 'live',
+    summary: 'Revoke a connection with Nango and mark it disconnected.',
+    sample: null,
   },
   {
     service: 'lifeos-ingest',

@@ -32,10 +32,15 @@ async fn main() {
     }
 
     // Localhost-only API; permissive CORS so the Vite dev server can call it.
+    // `allow_private_network` answers Chrome's Private Network Access preflight
+    // (`Access-Control-Request-Private-Network`) - without it, browsers that
+    // enforce PNA silently hang every non-simple (POST/PATCH/DELETE) request
+    // from the dev server origin to this API.
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_headers(Any)
+        .allow_private_network(true);
 
     let app = routes::router(state)
         .layer(cors)

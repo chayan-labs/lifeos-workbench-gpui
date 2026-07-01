@@ -15,7 +15,8 @@ Read `docs/ARCHITECTURE.md`, `docs/DATA-MODEL.md`, `docs/AGENT-CONTROL.md`, and 
 - **Shell is real:** `Layout.jsx` (sidebar nav, dark mode, mobile drawer), `BrandMark.jsx`, routing in `App.jsx`, the Neo-Brutalist design system in `index.css` + `frontend/DESIGN.md`. Keep all of it.
 - **AI surface is real and partly wired:** `AIConsole.jsx` + `lib/ai.js` already call `POST /api/llm` through `apiCall`, route intent through `lib/capabilities.js`, and fall back to a deterministic plan offline. This is the seed of the Agent Control Plane (see `docs/AGENT-CONTROL.md`).
 - **API Explorer is real and wired:** `APIExplorer.jsx` (embedded in `/integrations`) reads `API_ROUTES`, pings GET routes, and "tries" any route with its sample payload. It is the one surface that already exercises the whole API.
-- **Almost everything else is showcase:** Dashboard KPIs, the jobs queue, the harness telemetry table, the agent registry, the self-extension terminal, the ingest clips, and the integrations list are all hardcoded constants or `localStorage`, not backend data.
+- **Integrations page is real (issue #55):** `Integrations.jsx` lists real `connections` rows from `GET /api/connections` and drives `POST /api/connections/session` + Nango's `openConnectUI` (`@nangohq/frontend`) + `POST /api/connections/complete` for the connect flow, and `DELETE /api/connections/:id` for disconnect.
+- **Almost everything else is showcase:** Dashboard KPIs, the jobs queue, the harness telemetry table, the agent registry, the self-extension terminal, and the ingest clips are all hardcoded constants or `localStorage`, not backend data.
 
 The legacy `core/` IIFE layer (the pre-React prototype) has been **removed**.
 The React `apiCall` in `src/lib/api.js` now owns the tenant-header pattern it used to reference (see P0, done).
