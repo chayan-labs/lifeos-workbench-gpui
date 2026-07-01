@@ -1,9 +1,9 @@
 // Naive module-id derivation from a self-extension prompt (issue #72). The
 // PreToolUse hook (preToolUseHook.js) needs a concrete target directory
 // BEFORE the agent runs, so something outside the LLM call has to pick the
-// id first - real semantic id selection is #73's job (Zod structured
-// output, docs/SELF-EXTENSION.md §3), which can replace this call in
-// scaffold.js without touching the hook/sandbox/worktree wiring.
+// id first. #73 added the structured-output manifest, but its `id` field
+// is only known *after* the agent runs - so this pre-agent slug remains the
+// hook's target directory; scaffold.js now asserts the two agree.
 const MAX_LEN = 40;
 const FALLBACK = "custom_module";
 

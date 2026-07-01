@@ -1,21 +1,27 @@
-// Self-extension builder (issue #72, docs/SELF-EXTENSION.md). Drives the
+// Self-extension builder (issues #72/#73, docs/SELF-EXTENSION.md). Drives the
 // Claude Agent SDK, tool-restricted by all three defense-in-depth layers
-// (§2), in an isolated git worktree, and commits the result as the install
-// (§5).
+// (§2), in an isolated git worktree, requires a schema-valid structured-
+// output manifest (§3), and commits the result as the install (§5).
 //
-// Deliberately NOT wired in here (separate issues, matches this project's
+// `slugify()` still picks the module id *before* `query()` runs (Layer B's
+// hook needs a concrete target directory up front), but the agent's own
+// structured-output manifest.id is now asserted to match it - drift between
+// the two fails the build rather than silently installing a mismatched
+// manifest.
+//
+// Deliberately NOT wired in here (separate issue, matches this project's
 // incremental pattern - e.g. #66 enqueueing a job before a drain existed):
-// - Structured-output schema/id selection (§3, issue #73) - `slugify()` is a
-//   naive stand-in for picking the module id ahead of the agent call, since
-//   Layer B's hook needs a concrete target directory before `query()` runs.
 // - The two real validators (§4, issues #74/#75) - `server/validators/
 //   structural.js`/`render.js` are still fakes (string-includes checks / an
 //   unconditional `return true`) left over from an earlier prototype commit;
 //   calling them here would just give false confidence, so this file does
 //   not import them. Gating the merge on real validators is #74/#75's job.
+//   Validator 1 (#74) is expected to consume the manifest this file now
+//   returns on success, without re-parsing module.js.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { query as defaultQuery } from "@anthropic-ai/claude-agent-sdk";
+import { ModuleManifest, moduleManifestJsonSchema } from "./lib/moduleManifest.js";
 import { buildSandboxConfig } from "./lib/sandbox.js";
 import { createPreToolUseHook } from "./lib/preToolUseHook.js";
 import { slugify } from "./lib/slugify.js";
@@ -42,29 +48,43 @@ function buildPrompt(userPrompt, moduleId) {
     `Edit modules/${moduleId}/module.js (already seeded from the _template scaffold) so it satisfies this request:`,
     userPrompt,
     `Keep it a single osRegisterModule({...}) call, id: "${moduleId}". Only edit files under modules/${moduleId}/.`,
+    `When done, your structured output must summarize the manifest you wrote: id, name, icon, color, entityTypes (with attrs), views, botCommands, and agentTools - matching the id "${moduleId}" exactly.`,
   ].join("\n\n");
 }
 
 // Consumes the SDK's async-generator result stream, watching for a denied
 // tool call (tracked via the hook wrapper below, not by re-parsing SDK
 // messages - the hook already knows the ground truth) and a terminal
-// success/error `result` message.
-async function runAgent(queryFn, prompt, options, hookState) {
+// success/error `result` message carrying the schema-validated structured
+// output (docs/SELF-EXTENSION.md §3). Returns the parsed ModuleManifest.
+async function runAgent(queryFn, prompt, options, hookState, moduleId) {
   const stream = queryFn({ prompt, options });
-  let sawSuccess = false;
+  let resultMessage = null;
 
   for await (const message of stream) {
     if (message.type === "result") {
-      sawSuccess = message.subtype === "success" && !message.is_error;
+      resultMessage = message;
     }
   }
 
   if (hookState.denied) {
     throw new Error(`PreToolUse hook denied a write outside the module dir: ${hookState.reason}`);
   }
-  if (!sawSuccess) {
-    throw new Error("Agent SDK query did not complete successfully");
+  if (!resultMessage || resultMessage.subtype !== "success" || resultMessage.is_error) {
+    // Covers error_during_execution / error_max_turns / error_max_budget_usd
+    // and the SDK's own structured-output retry exhaustion.
+    throw new Error(`Agent SDK query did not complete successfully (subtype: ${resultMessage?.subtype ?? "none"})`);
   }
+
+  const parsed = ModuleManifest.safeParse(resultMessage.structured_output);
+  if (!parsed.success) {
+    throw new Error(`Structured output failed ModuleManifest validation: ${parsed.error.message}`);
+  }
+  if (parsed.data.id !== moduleId) {
+    throw new Error(`Structured output id "${parsed.data.id}" does not match target module id "${moduleId}"`);
+  }
+
+  return parsed.data;
 }
 
 export async function scaffoldModule(prompt, workspaceId, opts = {}) {
@@ -96,15 +116,16 @@ export async function scaffoldModule(prompt, workspaceId, opts = {}) {
       disallowedTools: DISALLOWED_TOOLS,
       permissionMode: "dontAsk",
       hooks: { PreToolUse: [{ matcher: "Write|Edit", hooks: [trackedHook] }] },
+      outputFormat: { type: "json_schema", schema: moduleManifestJsonSchema },
       ...buildSandboxConfig(),
     };
 
-    await runAgent(queryFn, buildPrompt(prompt, moduleId), options, hookState);
+    const manifest = await runAgent(queryFn, buildPrompt(prompt, moduleId), options, hookState, moduleId);
 
     await commitAndMerge(repoRoot, worktreePath, branch, moduleId);
     await removeWorktree(repoRoot, worktreePath, branch);
 
-    return { success: true, moduleId, workspaceId };
+    return { success: true, moduleId, workspaceId, manifest };
   } catch (error) {
     await removeWorktree(repoRoot, worktreePath, branch).catch(() => {});
     return { success: false, moduleId, workspaceId, error: error.message };

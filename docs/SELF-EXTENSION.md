@@ -65,8 +65,10 @@ package's `sdk.d.ts`, not just this doc). Deliberately deferred to later issues,
 file doesn't build more than #72's own checklist:
 - **Module id selection** - `server/lib/slugify.js` is a naive placeholder (lowercase,
   non-alnum → `_`). Layer B's hook needs a concrete target directory *before* `query()`
-  runs, so something outside the LLM call has to pick the id first; #73's structured output
-  (§3) can replace this call without touching the hook/sandbox/worktree code.
+  runs, so something outside the LLM call has to pick the id first; the agent's own
+  structured-output `id` (§3, issue #73) is now asserted to match this slug, but does not
+  replace it as the pre-agent directory choice - that chicken-and-egg constraint doesn't
+  go away with structured output, it just gets a consistency check.
 - **The two validators (§4, #74/#75)** are not called. `server/validators/structural.js`
   and `render.js` predate this issue and are fakes (a `content.includes('id:')`-style
   check and an unconditional `return true`, respectively, left over from an earlier
@@ -94,6 +96,23 @@ options.outputFormat = { type: "json_schema", schema };  // schema from Zod: z.t
 The SDK **validates the output and re-prompts on mismatch**. On success the result carries `structured_output`; on exhaustion `subtype === "error_max_structured_output_retries"`.
 Define the manifest schema in **Zod** (one source of truth), end with `ModuleManifest.safeParse(structured_output)` for end-to-end type safety.
 The agent emits the manifest summary (entityTypes/attrs/views/botCommands/agentTools ids) as structured output → it becomes the input to Validator 1 without re-reading files.
+
+**Implemented (issue #73):** `server/lib/moduleManifest.js` defines `ModuleManifest` in Zod
+(entityTypes with typed attrs, views, botCommands, agentTools, plus top-level id/name/icon/
+color) and derives `moduleManifestJsonSchema` via `z.toJSONSchema(ModuleManifest)`.
+`server/scaffold.js` sets `options.outputFormat = { type: "json_schema", schema:
+moduleManifestJsonSchema }` on the `query()` call, then on a `success` result runs
+`ModuleManifest.safeParse(result.structured_output)` - a validation failure, or a manifest
+`id` that disagrees with the pre-agent directory slug (§2's note above), aborts the build
+and discards the worktree, same failure path as a hook denial. The SDK's own
+`error_max_structured_output_retries` result subtype is treated as a hard failure, not
+retried again at this layer - the SDK already exhausted its retry budget.
+`server/test/moduleManifest.test.js` proves the schema's accept/reject boundary directly;
+`server/test/scaffold.test.js` adds cases for an invalid manifest, an id mismatch, and
+retry exhaustion, alongside #72's existing happy-path/escape-attempt/SDK-error cases - all
+still against a mocked `queryFn` and scratch git repo, no live API key (same rationale as
+#72's note above). The parsed `ModuleManifest` is now part of `scaffoldModule`'s success
+return value, ready for Validator 1 (#74) to consume without re-reading `module.js`.
 
 ---
 

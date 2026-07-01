@@ -31,11 +31,31 @@ afterEach(async () => {
   await fs.rm(repoRoot, { recursive: true, force: true });
 });
 
+const VALID_MANIFEST = {
+  id: "add_a_reading_list_module",
+  name: "Reading List",
+  icon: "BookOpen",
+  color: "var(--neo-yellow)",
+  entityTypes: [
+    {
+      id: "item",
+      label: "Item",
+      plural: "Items",
+      icon: "FileText",
+      attrs: { name: { type: "text", required: true } },
+    },
+  ],
+  views: [{ id: "all", label: "All Items", kind: "list", type: "item" }],
+  botCommands: [{ cmd: "add", help: "Add a reading list item" }],
+  agentTools: [{ name: "reading_list.add", gated: false }],
+};
+
 // A benign mock agent that never touches the hook - the copy-the-template
 // step in scaffold.js already seeds modules/<id>/module.js before the agent
-// runs, so a well-behaved query() just needs to report success.
+// runs, so a well-behaved query() just needs to report success with a
+// schema-valid structured_output manifest (issue #73).
 async function* benignQuery() {
-  yield { type: "result", subtype: "success", is_error: false };
+  yield { type: "result", subtype: "success", is_error: false, structured_output: VALID_MANIFEST };
 }
 
 describe("scaffoldModule - happy path", () => {
@@ -45,13 +65,67 @@ describe("scaffoldModule - happy path", () => {
       queryFn: () => benignQuery(),
     });
 
-    expect(result).toEqual({ success: true, moduleId: "add_a_reading_list_module", workspaceId: "ws_test" });
+    expect(result).toEqual({
+      success: true,
+      moduleId: "add_a_reading_list_module",
+      workspaceId: "ws_test",
+      manifest: VALID_MANIFEST,
+    });
 
     const installed = await fs.readFile(path.join(repoRoot, "modules", "add_a_reading_list_module", "module.js"), "utf8");
     expect(installed).toContain("osRegisterModule");
 
     const { stdout: worktrees } = await git(["worktree", "list"]);
     expect(worktrees.split("\n").filter(Boolean)).toHaveLength(1); // only the main worktree remains
+  });
+});
+
+describe("scaffoldModule - structured output validation", () => {
+  it("aborts and merges nothing when structured_output fails ModuleManifest validation", async () => {
+    async function* invalidManifestQuery() {
+      yield { type: "result", subtype: "success", is_error: false, structured_output: { id: "add_a_reading_list_module" } };
+    }
+
+    const { stdout: before } = await git(["log", "--oneline", "main"]);
+
+    const result = await scaffoldModule("add a reading list module", "ws_test", {
+      repoRoot,
+      queryFn: () => invalidManifestQuery(),
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/failed ModuleManifest validation/);
+
+    const { stdout: after } = await git(["log", "--oneline", "main"]);
+    expect(after).toBe(before);
+  });
+
+  it("aborts when the manifest id disagrees with the pre-agent directory slug", async () => {
+    async function* mismatchedIdQuery() {
+      yield { type: "result", subtype: "success", is_error: false, structured_output: { ...VALID_MANIFEST, id: "something_else" } };
+    }
+
+    const result = await scaffoldModule("add a reading list module", "ws_test", {
+      repoRoot,
+      queryFn: () => mismatchedIdQuery(),
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/does not match target module id/);
+  });
+
+  it("aborts when the SDK exhausts structured-output retries", async () => {
+    async function* exhaustedRetriesQuery() {
+      yield { type: "result", subtype: "error_max_structured_output_retries", is_error: true };
+    }
+
+    const result = await scaffoldModule("add a reading list module", "ws_test", {
+      repoRoot,
+      queryFn: () => exhaustedRetriesQuery(),
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/did not complete successfully/);
   });
 });
 

@@ -78,6 +78,12 @@ the SDK. The two validators this section's last sentence implies ("every install
 commit") still gate on are not wired in yet - `docs/SELF-EXTENSION.md`'s #72 note has the
 full real-vs-deferred breakdown.
 
+**Implemented (issue #73):** the install-as-commit step above is now additionally gated on
+a schema-valid manifest - `server/lib/moduleManifest.js`'s Zod `ModuleManifest` drives
+`options.outputFormat` on the same `query()` call, and a failed `safeParse` (or an id that
+disagrees with the sandboxed directory) aborts the build before anything is committed, the
+same fail-closed path as a Layer B hook denial. See `docs/SELF-EXTENSION.md` §3's note.
+
 ---
 
 ## 4. Browser actuator containment
