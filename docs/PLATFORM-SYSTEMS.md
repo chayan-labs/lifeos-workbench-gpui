@@ -61,6 +61,17 @@ is workspace-scoped (`worker/src/db.ts::resolveWorkspaceId`, #64) and reads/writ
 `entities.ts`/`events.ts`, never a direct query - tested against a real in-memory libSQL DB,
 `worker/test/{entities,events,commands,bot}.test.ts`.
 
+**Implemented (issue #71):** `worker/src/digest.ts::buildDigest` composes the pieces above
+into one message. It's a Cloudflare **Cron Trigger** (`wrangler.toml`'s `[triggers] crons`),
+not a `jobs` row - the digest is a pure DB read + a single Telegram send, no heavy/codegen
+work a Mac drain would need to do, so routing it through the `jobs`/drain machinery #66/#67
+built for outward-provider-call and Mac-only work would add a hop for no reason. `index.ts`
+exports a `scheduled(event, env)` handler that builds and sends it; unset `DIGEST_CHAT_ID`
+means no digest (manual-setup-gated the same way `BOT_TOKEN`/`TURSO_URL`/etc. are,
+`docs/MANUAL-SETUP.md`). `buildDigest` is fully unit-tested (`worker/test/digest.test.ts`);
+the actual Telegram send is verified live post-deployment, same as `/telegram` itself. PWA
+push mirroring this digest is Phase 7, not yet built.
+
 ---
 
 ## 4. Module marketplace (the SaaS seam)

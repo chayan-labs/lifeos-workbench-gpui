@@ -47,6 +47,12 @@ is a separate, not-yet-scoped piece of work.
   reads like `/today`/`/pnl`, not just #66's approve/deny transitions - is fully
   reconstructable from `events`. Non-command text (no `/` prefix) is not logged, since it's
   never routed to a handler either.
+- Issue #71: daily digest - `src/digest.ts::buildDigest` rolls up `/today`, `/inbox`
+  (uncategorized/blocked), `/pnl`, and pending approvals into one message, reusing those
+  already-tested commands rather than re-querying. `index.ts` exports a `scheduled` handler
+  (Cloudflare Cron Trigger, `wrangler.toml`'s `[triggers] crons`) that builds and sends it -
+  a no-op unless `DIGEST_CHAT_ID` is set (manual, see `docs/MANUAL-SETUP.md`). PWA push
+  mirroring the same digest is Phase 7, not this issue.
 
 Every DB query in `src/entities.ts` filters by `workspace_id`, resolved server-side from
 `env.WORKSPACE_ID` (never from Telegram input) via `resolveWorkspaceId()` in `src/db.ts`.

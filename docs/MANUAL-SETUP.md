@@ -308,3 +308,22 @@ actuator can do anything a logged-in you can on the sites it has a captured
 session for - it is `docs/SECURITY.md` §4's most powerful and most dangerous
 integration. Only approve drafted `browser.act` entities whose task string
 you've actually read.
+
+### #71 - enable the daily digest (`DIGEST_CHAT_ID`)
+
+`worker/src/digest.ts` and the `scheduled` handler in `worker/src/index.ts` are committed
+and covered by `worker/test/digest.test.ts`/`index.test.ts` (a local DB and an early-return
+check, no live Telegram send). The cron trigger itself (`wrangler.toml`'s
+`[triggers] crons = ["0 8 * * *"]`) is already deployed with every `wrangler deploy` - it
+just no-ops until you set the chat to send to:
+
+```sh
+# message the bot once first, then read the chat id off the update, or ask
+# @userinfobot - it's the same chat id Telegram already uses for every reply.
+npx wrangler secret put DIGEST_CHAT_ID   # not actually secret, but simplest as a secret put here
+```
+
+(`DIGEST_CHAT_ID` is declared as a `[vars]` entry in `wrangler.toml` for local dev/`.dev.vars`;
+either a `wrangler secret put` or an uncommented `[vars]` line works in production - it isn't
+sensitive, it's just where the digest goes.) Edit the cron expression in `wrangler.toml` and
+redeploy to change the send time.

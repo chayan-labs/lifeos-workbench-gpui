@@ -5,6 +5,7 @@
 import { webhookCallback } from "grammy";
 import { createBot } from "./bot.js";
 import { createDb, resolveWorkspaceId } from "./db.js";
+import { buildDigest } from "./digest.js";
 
 export interface Env {
   BOT_TOKEN: string;
@@ -13,6 +14,11 @@ export interface Env {
   TURSO_TOKEN: string;
   ANTHROPIC_API_KEY: string;
   WORKSPACE_ID?: string;
+  // issue #71 - where the scheduled digest is sent; unset = no digest
+  // (manual-setup-gated, same as every other deploy-time value in this
+  // file, see docs/MANUAL-SETUP.md). Get this by messaging the bot once and
+  // reading the chat id off the update, or from @userinfobot.
+  DIGEST_CHAT_ID?: string;
 }
 
 export default {
@@ -32,5 +38,18 @@ export default {
     }
 
     return new Response("not found", { status: 404 });
+  },
+
+  // Cloudflare Cron Trigger (wrangler.toml's `[triggers] crons`), issue #71.
+  // No-ops when DIGEST_CHAT_ID isn't set - real send is verified live
+  // post-deployment, same as `/telegram` (worker/test/index.test.ts).
+  async scheduled(_event: ScheduledEvent, env: Env): Promise<void> {
+    if (!env.DIGEST_CHAT_ID) return;
+
+    const db = createDb(env);
+    const workspaceId = resolveWorkspaceId(env);
+    const digest = await buildDigest(db, workspaceId, Math.floor(Date.now() / 1000));
+    const bot = createBot({ token: env.BOT_TOKEN, db, workspaceId });
+    await bot.api.sendMessage(Number(env.DIGEST_CHAT_ID), digest);
   },
 };

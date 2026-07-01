@@ -12,6 +12,14 @@ compatibility_date = "2026-07-01"
 #   ANTHROPIC_API_KEY  - Haiku key for the bot's own reasoning (issue #64)
 
 # Vars (non-secret, can live in this file):
-#   WORKSPACE_ID - defaults to "default-personal-workspace" if unset (db.ts)
+#   WORKSPACE_ID   - defaults to "default-personal-workspace" if unset (db.ts)
+#   DIGEST_CHAT_ID - Telegram chat id the daily digest is sent to (issue #71);
+#                    unset = no digest. Get it by messaging the bot once and
+#                    reading `message.chat.id`, or ask @userinfobot.
 [vars]
 # WORKSPACE_ID = "default-personal-workspace"
+# DIGEST_CHAT_ID = "123456789"
+
+# Daily digest cron trigger (issue #71) - 08:00 UTC; edit to taste.
+[triggers]
+crons = ["0 8 * * *"]

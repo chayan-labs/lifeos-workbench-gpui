@@ -29,3 +29,13 @@ describe("worker fetch handler", () => {
     expect(res.status).toBe(404);
   });
 });
+
+// issue #71: `scheduled` no-ops without DIGEST_CHAT_ID - unit-testable since
+// that path never touches the DB or the network. The send-a-real-digest path
+// needs a live TURSO_URL + Telegram, so it's verified post-deployment, same
+// as `/telegram` above.
+describe("worker scheduled handler", () => {
+  it("does nothing when DIGEST_CHAT_ID is unset", async () => {
+    await expect(worker.scheduled(undefined as never, TEST_ENV)).resolves.toBeUndefined();
+  });
+});
