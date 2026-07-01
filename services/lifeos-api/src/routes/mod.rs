@@ -96,6 +96,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/notion/push", post(notion::push))
         .route("/api/slack/list", get(slack::list))
         .route("/api/slack/post", post(slack::post))
+        // --- Slack module: materialize channels/messages as entities (issue #60) ---
+        .route("/api/slack/sync", post(slack::sync))
         // --- browser actuator: free read-only scrape, gated act, one
         //     interactive session-capture route (issue #54) ---
         .route("/api/browser/scrape", post(browser::scrape))

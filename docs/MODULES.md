@@ -215,6 +215,15 @@ write in this milestone (#52/#53/#56/#57/#58).
 - **Entity types:** `channel`, `message`.
 - **Tools:** read free; `slack.post` 🔒. Doubles as a second capture/notify surface alongside Telegram.
 
+**Implemented (issue #60):** `POST /api/slack/sync` (`services/lifeos-api/src/routes/slack.rs`) materializes
+`conversations.list` as `channel` entities and each channel's `conversations.history` as `message` entities,
+idempotently keyed on Slack's own channel id / message `ts` (Slack's per-channel-unique message timestamp) - both
+capture, and re-syncing never duplicates. `POST /api/slack/post` (#53) is unchanged: gated by construction, only
+ever creates a `pending_approval` draft and has no code path to `chat.postMessage`. The live SPA's Slack module
+(`frontend/src/lib/moduleManifests.js::SLACK_MANIFEST`, routed at `/m/slack`) browses channels/messages through the
+generic list renderer plus the shared "Sync channels" pull action. Thread replies, reactions, and the
+approve→execute queue for `slack_post` drafts are deferred to later work.
+
 ### 3.6 Reading
 - **Entity types:** `source` (RSS/site/author), `article`, `highlight`, `read_note`.
 - **attrs:** article → `{url, title, author, published, text_ref(blob), read_state, est_minutes}`; highlight → `{quote, t_offset, color}`.

@@ -464,6 +464,34 @@ export const NOTION_MANIFEST = {
   ],
 };
 
+// `slack.sync|read` are free; `slack.post` stays gated through the same
+// draft.create -> human-approve path every other outward write uses
+// (services/lifeos-api/src/routes/slack.rs) - Slack is a second
+// capture/notify surface alongside Telegram, not an outbound channel the
+// agent can post to unsupervised.
+export const SLACK_MANIFEST = {
+  id: 'slack',
+  name: 'Slack',
+  icon: '💬',
+  sync: { label: 'Sync channels', path: '/api/slack/sync' },
+  entityTypes: {
+    channel: {
+      label: 'Channel',
+      plural: 'Channels',
+      display: { title: 'title' },
+    },
+    message: {
+      label: 'Message',
+      plural: 'Messages',
+      display: { title: 'title', subtitle: (e) => e.attrs?.user },
+    },
+  },
+  views: [
+    { id: 'channels', label: 'Channels', kind: 'list', type: 'channel' },
+    { id: 'messages', label: 'Messages', kind: 'list', type: 'message' },
+  ],
+};
+
 export const MODULE_MANIFESTS = {
   learning: LEARNING_MANIFEST,
   tasks: TASKS_MANIFEST,
@@ -476,6 +504,7 @@ export const MODULE_MANIFESTS = {
   calendar: CALENDAR_MANIFEST,
   files: FILES_MANIFEST,
   notion: NOTION_MANIFEST,
+  slack: SLACK_MANIFEST,
 };
 
 export function getManifest(id) {
