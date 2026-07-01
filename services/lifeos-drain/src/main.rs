@@ -17,7 +17,11 @@
 //! LIFEOS_DERIVED_DB_PATH (default `lifeos-derived.db`, only used when
 //! LIFEOS_MEMVEC is set), LIFEOS_WHISPER_MODEL (optional path to a GGML
 //! whisper.cpp model, e.g. ggml-tiny.en.bin - without it, audio ingest jobs
-//! fail loudly rather than silently producing zero segments, see #89).
+//! fail loudly rather than silently producing zero segments, see #89),
+//! ANTHROPIC_API_KEY (optional - without it, image ingest jobs fail loudly,
+//! see #90), LIFEOS_TESSERACT_BIN (optional path to the `tesseract` CLI
+//! binary - without it, image ingest still captions, just without OCR text,
+//! see #90).
 
 use libsql::Builder;
 use lifeos_drain::{
@@ -25,7 +29,10 @@ use lifeos_drain::{
     run_module_build, Dispatch, DrainConfig, NoopNotifier, Notifier, ScaffoldJsBuilder,
     TelegramNotifier,
 };
-use lifeos_ingest::{Embedder, IngestJobPayload, NoopEmbedder, NoopTranscriber, SubprocessEmbedder, Transcriber, WhisperTranscriber};
+use lifeos_ingest::{
+    Captioner, Embedder, HaikuCaptioner, IngestJobPayload, NoopCaptioner, NoopEmbedder, NoopOcr,
+    NoopTranscriber, Ocr, SubprocessEmbedder, TesseractOcr, Transcriber, WhisperTranscriber,
+};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 
@@ -98,9 +105,37 @@ async fn main() {
         }
     };
 
+    let captioner: Box<dyn Captioner> = match std::env::var("ANTHROPIC_API_KEY") {
+        Ok(api_key) if !api_key.is_empty() => Box::new(HaikuCaptioner { api_key }),
+        _ => {
+            println!("lifeos-drain: ANTHROPIC_API_KEY not set, image ingest jobs will fail loudly");
+            Box::new(NoopCaptioner)
+        }
+    };
+
+    let ocr: Box<dyn Ocr> = match std::env::var("LIFEOS_TESSERACT_BIN") {
+        Ok(bin_path) if !bin_path.is_empty() => Box::new(TesseractOcr { bin_path }),
+        _ => {
+            println!("lifeos-drain: LIFEOS_TESSERACT_BIN not set, image ingest will caption without OCR text");
+            Box::new(NoopOcr)
+        }
+    };
+
     loop {
         match claim_job(&conn, &worker_id, now_secs(), cfg).await {
-            Ok(Some(job)) => run_job(&conn, &job, &worker_id, &vcs_store, embedder.as_ref(), transcriber.as_ref()).await,
+            Ok(Some(job)) => {
+                run_job(
+                    &conn,
+                    &job,
+                    &worker_id,
+                    &vcs_store,
+                    embedder.as_ref(),
+                    transcriber.as_ref(),
+                    captioner.as_ref(),
+                    ocr.as_ref(),
+                )
+                .await
+            }
             Ok(None) => {}
             Err(e) => eprintln!("lifeos-drain: claim failed: {e}"),
         }
@@ -121,6 +156,7 @@ async fn main() {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_job(
     conn: &libsql::Connection,
     job: &lifeos_drain::ClaimedJob,
@@ -128,6 +164,8 @@ async fn run_job(
     vcs_store: &lifeos_vcs::ObjectStore,
     embedder: &dyn Embedder,
     transcriber: &dyn Transcriber,
+    captioner: &dyn Captioner,
+    ocr: &dyn Ocr,
 ) {
     println!("lifeos-drain: claimed {} (kind={})", job.id, job.kind);
     let result = match dispatch(&job.kind) {
@@ -142,6 +180,8 @@ async fn run_job(
                 vcs_store,
                 embedder,
                 transcriber,
+                captioner,
+                ocr,
                 &job.workspace_id,
                 payload,
                 now_secs(),

@@ -60,14 +60,29 @@ is unset, `lifeos-drain` uses a `NoopTranscriber` that fails the job loudly rath
 silently producing zero segments - a missing transcriber for a MIME class the router says it
 can handle is a real capability gap, not an honest "still stubbed" state.
 
-Video containers (`.mov/.webm/.mp4` - no general video-container demuxer here) and image/PDF/
-docx (**#90**, vision-LLM captioning / OCR / pdfium text extraction) remain honest stubs:
-`route_by_mime` returns `Unsupported{kind, blocked_by}` naming the exact gap - never a silent
-no-op. No segments are created for an unsupported kind; the parent entity's
+**Implemented (issue #90):** images (`.png/.jpg/.jpeg/.gif/.webp`), PDF (`.pdf`), and docx
+(`.docx`) are real now. `services/lifeos-ingest/src/vision.rs::HaikuCaptioner` calls the
+Anthropic Messages API directly over `reqwest` (model `claude-haiku-4-5-20251001`, no SDK
+dependency) for a one/two-sentence caption; `src/ocr.rs::TesseractOcr` shells out to the
+`tesseract` CLI (subprocess, same DI shape as `SubprocessEmbedder`) for any visible text -
+OCR is a supplement, so a failure degrades to empty text rather than failing the job, unlike
+captioning which fails loudly (routing claims image support). One `type=segment` child holds
+the caption; a second holds OCR text when non-empty and distinct from the caption.
+`src/docs_extract.rs::extract_pdf_pages` uses the pure-Rust `pdf-extract` crate to pull text
+per page (`attrs.page = <1-based index>` locator, one segment per non-empty page) and
+`extract_docx_text` reads `word/document.xml` out of the docx zip and pulls `<w:t>` text runs,
+then reuses `chunk_plain_text` for paragraph segmentation. **Deliberate deviation from
+`docs/RUST-COMPONENTS.md`'s original "pdfium/poppler" wording:** `pdf-extract`/zip+XML are
+pure Rust with no C bindgen or extra system library, matching "reuse before build" over the
+heaviest available option - only OCR needs a real system binary (`tesseract`, via Nix).
+
+Video containers (`.mov/.webm/.mp4` - no general video-container demuxer here) remain an
+honest stub: `route_by_mime` returns `Unsupported{kind, blocked_by}` naming the exact gap -
+never a silent no-op. No segments are created for an unsupported kind; the parent entity's
 `attrs.ingest_status="unsupported"` + `attrs.ingest_blocked_by` record why, and an
-`ingest.unsupported` event is emitted - the job still completes (nothing to retry until #90
-lands for images/PDF or a video-container demuxer exists), it just honestly produces zero
-segments rather than fabricating any.
+`ingest.unsupported` event is emitted - the job still completes (nothing to retry until a
+video-container demuxer exists), it just honestly produces zero segments rather than
+fabricating any.
 
 ---
 
@@ -77,8 +92,8 @@ segments rather than fabricating any.
 |---|---|---|---|
 | Orchestrator `lifeos-ingest` | dispatch by MIME, manage segments, write entities | BUILD | 🦀 |
 | Transcription (audio/video) | **whisper-rs** or **candle-whisper** (fallback whisper.cpp) | FORK | 🦀 |
-| Image caption / OCR | vision-LLM (Haiku) for caption; **tesseract** for OCR | reuse/fork | mixed |
-| PDF / doc text | **pdfium** / poppler bindings | fork | C |
+| Image caption / OCR | vision-LLM (Haiku, via `reqwest`) for caption; **tesseract** CLI subprocess for OCR | reuse/fork | mixed |
+| PDF / doc text | **pdf-extract** (pure Rust) for PDF; zip+**quick-xml** for docx | reuse | 🦀 |
 | Embedding | **memvec.py** (MiniLM-384, sqlite-vec) | reuse as-is | Python |
 | (optional) visual search | **candle-clip** image embeddings | fork | 🦀 |
 

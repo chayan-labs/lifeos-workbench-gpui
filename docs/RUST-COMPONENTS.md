@@ -11,7 +11,7 @@
 |---|---|---|
 | **lifeos-api** | The single DB-token owner + security boundary; workspace scoping; secret injection; metrics agg. The trust anchor. | `axum`, `tokio`, libSQL client, `serde`, `jsonwebtoken` |
 | **lifeos-vcs** | Tight hashing/IO loops, large-file throughput, memory-safe object store. | `blake3`, `fastcdc`, `jj-lib`, `object_store`, `rusqlite` |
-| **lifeos-ingest** | Media→text orchestration, transcription throughput. | `whisper-rs`/`candle`, `pdfium`, `image`, (opt) `candle` CLIP |
+| **lifeos-ingest** | Media→text orchestration, transcription throughput. | `whisper-rs`, `reqwest` (Haiku vision captioning), `pdf-extract`, `zip`+`quick-xml` (docx), `tesseract` CLI subprocess (OCR), (opt) `candle` CLIP |
 | **lifeos-pipelines** | Hot event loop dispatching agent DAGs + Life OS Actions. | `tokio`, libSQL client; shells to Agent SDK |
 | **lifeos-drain** | Atomic job claim + reaper; crash recovery. | libSQL client, `tokio` |
 | **broker-guard** | Fail-closed PreToolUse guard; "illegal states unrepresentable" for trade-order denial. | small std-only binary |

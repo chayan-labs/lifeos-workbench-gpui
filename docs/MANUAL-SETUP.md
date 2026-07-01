@@ -416,10 +416,10 @@ export LIFEOS_DERIVED_DB_PATH="/path/to/life-os/lifeos-derived.db"
 blob CAS root, default `lifeos-blobs`) must point at the same directory `lifeos-api` writes
 committed file bytes into, so `lifeos-drain` can read the blob it's ingesting.
 
-Audio transcription is real now (#89, below). Video containers and image/PDF/docx captioning/
-OCR/text-extraction (#90) are still honest stubs: `lifeos-ingest` names the blocking gap on the
-parent entity's `attrs.ingest_blocked_by` rather than pretending to extract anything. One true
-end-to-end check once `LIFEOS_MEMVEC` is set: commit a `.txt` file via `POST /api/vcs/commit`,
+Audio transcription (#89) and image captioning/OCR + PDF/docx text extraction (#90, below) are
+real now. Only video containers remain an honest stub: `lifeos-ingest` names the blocking gap on
+the parent entity's `attrs.ingest_blocked_by` rather than pretending to extract anything. One
+true end-to-end check once `LIFEOS_MEMVEC` is set: commit a `.txt` file via `POST /api/vcs/commit`,
 enqueue `POST /api/ingest {"entity_id": "<the file's id>"}`, run `lifeos-drain`, confirm
 `segment` child entities appear via `GET /api/entity?type=segment` and a `memvec.py query` for
 a phrase from the file returns one of them.
@@ -459,3 +459,40 @@ via `POST /api/vcs/commit`, enqueue `POST /api/ingest {"entity_id": "<the file's
 `lifeos-drain` with `LIFEOS_WHISPER_MODEL` set, confirm `segment` child entities appear via
 `GET /api/entity?type=segment` with real `attrs.t_start`/`attrs.t_end`/`attrs.text` matching
 what's actually said in the clip.
+
+### #90 - `lifeos-drain` env for image captioning/OCR + PDF/docx extraction (`ANTHROPIC_API_KEY`, `LIFEOS_TESSERACT_BIN`)
+
+`services/lifeos-ingest` now routes images (`.png/.jpg/.jpeg/.gif/.webp`) through vision-LLM
+captioning (`vision::HaikuCaptioner`, a thin `reqwest` client against the Anthropic Messages API
+- no SDK dependency) plus tesseract OCR (`ocr::TesseractOcr`, shells out to the `tesseract` CLI),
+and PDF (`docs_extract::extract_pdf_pages`, pure-Rust `pdf-extract`) / docx
+(`docs_extract::extract_docx_text`, zip+XML text pull) through real text extraction - no C
+bindgen/system libs beyond the `tesseract` binary itself. Two env vars, both read in
+`services/lifeos-drain/src/main.rs`:
+
+```sh
+# Anthropic API key used for image captioning (model claude-haiku-4-5-20251001).
+# Without this set, lifeos-drain uses a NoopCaptioner that fails image ingest
+# jobs loudly (not silently) - route_by_mime says it CAN handle this MIME
+# class now, so a missing key is a real gap, same reasoning as
+# LIFEOS_WHISPER_MODEL for audio.
+export ANTHROPIC_API_KEY="sk-ant-..."
+
+# Path to the tesseract CLI binary (install via Nix: nix-shell -p tesseract
+# for a one-off, or add to home.packages for permanent). Without this set,
+# lifeos-drain uses a NoopOcr that degrades gracefully to empty OCR text -
+# unlike captioning, OCR is a supplement (screenshots/signage/scanned text),
+# not the sole extractor, so a missing binary doesn't fail the job.
+export LIFEOS_TESSERACT_BIN="/run/current-system/sw/bin/tesseract"
+```
+
+PDF and docx extraction need no env var - both are pure-Rust and always on. The automated test
+suite never calls the real Anthropic API or the real `tesseract` binary (`MockCaptioner`/
+`MockOcr`/`NoopCaptioner`/`NoopOcr` stand in, same "heavy external dependency mocked in tests"
+boundary as `WhisperTranscriber`/`SubprocessEmbedder`); PDF/docx tests build minimal valid
+bytes in-test (a byte-accurate hand-rolled PDF, an in-memory zip for docx) rather than shipping
+binary fixture files. One true end-to-end check once both env vars are set: commit an image via
+`POST /api/vcs/commit`, enqueue `POST /api/ingest {"entity_id": "<the file's id>"}`, run
+`lifeos-drain`, confirm a caption `segment` and (if the image has visible text) an OCR `segment`
+appear via `GET /api/entity?type=segment`. For a PDF, confirm each non-empty page becomes its
+own `segment` with `attrs.page` matching the real page number.

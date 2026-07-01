@@ -11,11 +11,14 @@
 //! dispatch, segment-entity creation, and triggering memvec indexing. #89
 //! added real transcription for `.mp3/.wav/.m4a` via `symphonia` (decode) +
 //! `whisper-rs` (transcribe) - see `audio::decode_to_16k_mono_f32` and
-//! `WhisperTranscriber`. Video containers (`.mov/.webm/.mp4`) and
-//! image/PDF/docx captioning/OCR/text-extraction (#90) are still honestly
-//! reported as `Unsupported { kind, blocked_by }`, matching the same
-//! `blocked_by` issue numbers `lifeos_vcs::diff::blocking_issue_for` already
-//! uses for those MIME classes.
+//! `WhisperTranscriber`. #90 added real image captioning (`vision::
+//! HaikuCaptioner`, Anthropic vision API) + OCR (`ocr::TesseractOcr`,
+//! `tesseract` CLI subprocess) for images, and text extraction for PDF
+//! (`docs_extract::extract_pdf_pages`, `pdf-extract`) and docx
+//! (`docs_extract::extract_docx_text`, zip+XML). Video containers
+//! (`.mov/.webm/.mp4`) remain an honest `Unsupported { kind, blocked_by }`
+//! gap, matching the same `blocked_by` issue numbers `lifeos_vcs::diff::
+//! blocking_issue_for` already uses for that MIME class.
 
 use async_trait::async_trait;
 use libsql::{params, Connection};
@@ -25,6 +28,11 @@ use std::fmt;
 
 pub mod audio;
 pub use audio::AudioError;
+pub mod docs_extract;
+pub mod ocr;
+pub mod vision;
+pub use ocr::{NoopOcr, Ocr, TesseractOcr};
+pub use vision::{Captioner, HaikuCaptioner, NoopCaptioner};
 use std::sync::Mutex;
 use ulid::{Generator, Ulid};
 
@@ -77,6 +85,12 @@ pub enum MimeRoute {
     PlainText,
     /// `.mp3/.wav/.m4a` - symphonia can demux+decode all three (issue #89).
     Audio,
+    /// `.png/.jpg/.jpeg/.gif/.webp` - vision-LLM caption + tesseract OCR (issue #90).
+    Image,
+    /// `.pdf` - `pdf-extract` per-page text (issue #90).
+    Pdf,
+    /// `.docx` - zip+XML text pull (issue #90).
+    Docx,
     Unsupported { kind: &'static str, blocked_by: &'static str },
 }
 
@@ -104,19 +118,36 @@ pub fn route_by_mime(name: &str, hint_kind: Option<&str>) -> MimeRoute {
         return MimeRoute::Unsupported { kind: "video", blocked_by: VIDEO_GAP };
     }
     if IMAGE_EXT.iter().any(|ext| lower.ends_with(ext)) {
-        return MimeRoute::Unsupported { kind: "image", blocked_by: "lifeos-ingest image captioning (#90)" };
+        return MimeRoute::Image;
     }
     if lower.ends_with(".pdf") {
-        return MimeRoute::Unsupported { kind: "pdf", blocked_by: "lifeos-ingest text extraction (#90)" };
+        return MimeRoute::Pdf;
     }
     if lower.ends_with(".docx") {
-        return MimeRoute::Unsupported { kind: "docx", blocked_by: "lifeos-ingest text extraction (#90)" };
+        return MimeRoute::Docx;
     }
     match hint_kind {
         Some("audio") => MimeRoute::Audio,
         Some("video") => MimeRoute::Unsupported { kind: "video", blocked_by: VIDEO_GAP },
-        Some("image") => MimeRoute::Unsupported { kind: "image", blocked_by: "lifeos-ingest image captioning (#90)" },
+        Some("image") => MimeRoute::Image,
         _ => MimeRoute::Unsupported { kind: "unknown", blocked_by: "no MIME route defined for this file type yet" },
+    }
+}
+
+/// Maps an image file name to the media type the Anthropic vision API
+/// expects. Defaults to PNG for unrecognized/hint-only routes - the API
+/// rejects a wrong media type outright, so this is a best-effort guess, not
+/// a validated content-sniff.
+fn image_media_type(name: &str) -> &'static str {
+    let lower = name.to_ascii_lowercase();
+    if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        "image/jpeg"
+    } else if lower.ends_with(".gif") {
+        "image/gif"
+    } else if lower.ends_with(".webp") {
+        "image/webp"
+    } else {
+        "image/png"
     }
 }
 
@@ -286,6 +317,8 @@ pub enum IngestError {
     Io(std::io::Error),
     Audio(AudioError),
     Transcription(String),
+    Caption(String),
+    Extraction(String),
 }
 
 impl fmt::Display for IngestError {
@@ -298,6 +331,8 @@ impl fmt::Display for IngestError {
             IngestError::Io(e) => write!(f, "blob store error: {e}"),
             IngestError::Audio(e) => write!(f, "{e}"),
             IngestError::Transcription(e) => write!(f, "transcription failed: {e}"),
+            IngestError::Caption(e) => write!(f, "captioning failed: {e}"),
+            IngestError::Extraction(e) => write!(f, "text extraction failed: {e}"),
         }
     }
 }
@@ -347,6 +382,7 @@ fn entity_display_name(entity: &SourceEntity, payload: &IngestJobPayload) -> Str
 /// returns its id. Shared by the plain-text (#88) and audio (#89) paths -
 /// `t_start`/`t_end` are `None` for plain text (no real locator) and
 /// `Some` for transcribed audio.
+#[allow(clippy::too_many_arguments)]
 async fn insert_segment(
     conn: &Connection,
     embedder: &(dyn Embedder + Sync),
@@ -356,6 +392,7 @@ async fn insert_segment(
     text: &str,
     t_start_secs: Option<f64>,
     t_end_secs: Option<f64>,
+    page: Option<u32>,
     now: i64,
 ) -> Result<String, IngestError> {
     let seg_id = new_id("segment");
@@ -363,6 +400,9 @@ async fn insert_segment(
     if let (Some(t0), Some(t1)) = (t_start_secs, t_end_secs) {
         attrs["t_start"] = json!(t0);
         attrs["t_end"] = json!(t1);
+    }
+    if let Some(p) = page {
+        attrs["page"] = json!(p);
     }
     conn.execute(
         "INSERT INTO entities (id, workspace_id, module, type, parent_id, attrs, source, created_at, updated_at) \
@@ -417,11 +457,14 @@ async fn finish_completed(
 
 /// The core, fully-testable orchestration `lifeos-drain` calls for every
 /// claimed `ingest` job.
+#[allow(clippy::too_many_arguments)]
 pub async fn process_ingest_job(
     conn: &Connection,
     store: &lifeos_vcs::ObjectStore,
     embedder: &(dyn Embedder + Sync),
     transcriber: &(dyn Transcriber + Sync),
+    captioner: &(dyn Captioner + Sync),
+    ocr: &(dyn Ocr + Sync),
     workspace_id: &str,
     payload: IngestJobPayload,
     now: i64,
@@ -452,8 +495,10 @@ pub async fn process_ingest_job(
             let chunks = chunk_plain_text(&text);
             let mut segment_ids = Vec::with_capacity(chunks.len());
             for chunk in &chunks {
-                let seg_id =
-                    insert_segment(conn, embedder, workspace_id, &entity.module, &entity_id, chunk, None, None, now).await?;
+                let seg_id = insert_segment(
+                    conn, embedder, workspace_id, &entity.module, &entity_id, chunk, None, None, None, now,
+                )
+                .await?;
                 segment_ids.push(seg_id);
             }
 
@@ -477,6 +522,7 @@ pub async fn process_ingest_job(
                     &seg.text,
                     Some(seg.t_start_secs),
                     Some(seg.t_end_secs),
+                    None,
                     now,
                 )
                 .await?;
@@ -488,6 +534,91 @@ pub async fn process_ingest_job(
             }
 
             finish_completed(conn, store, workspace_id, &entity_id, &full_text, segment_ids, now).await
+        }
+        MimeRoute::Image => {
+            let bytes = lifeos_vcs::read_blob(store, &blob_ref).map_err(IngestError::Io)?;
+            let mime = image_media_type(&name);
+            let caption = captioner.caption(&bytes, mime).await.map_err(IngestError::Caption)?;
+            let ocr_text = match ocr.extract_text(&bytes).await {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("lifeos-ingest: ocr failed for {entity_id}, continuing with caption only: {e}");
+                    String::new()
+                }
+            };
+
+            let mut segment_ids = Vec::with_capacity(2);
+            let caption_seg_id = insert_segment(
+                conn, embedder, workspace_id, &entity.module, &entity_id, &caption, None, None, None, now,
+            )
+            .await?;
+            segment_ids.push(caption_seg_id);
+
+            let mut full_text = caption.clone();
+            let ocr_trimmed = ocr_text.trim();
+            if !ocr_trimmed.is_empty() && ocr_trimmed != caption.trim() {
+                let ocr_seg_id = insert_segment(
+                    conn, embedder, workspace_id, &entity.module, &entity_id, ocr_trimmed, None, None, None, now,
+                )
+                .await?;
+                segment_ids.push(ocr_seg_id);
+                full_text.push_str("\n\n");
+                full_text.push_str(ocr_trimmed);
+            }
+
+            finish_completed(conn, store, workspace_id, &entity_id, &full_text, segment_ids, now).await
+        }
+        MimeRoute::Pdf => {
+            let bytes = lifeos_vcs::read_blob(store, &blob_ref).map_err(IngestError::Io)?;
+            let pages = tokio::task::spawn_blocking(move || docs_extract::extract_pdf_pages(&bytes))
+                .await
+                .map_err(|e| IngestError::Extraction(format!("pdf extraction task panicked: {e}")))?
+                .map_err(IngestError::Extraction)?;
+
+            let mut segment_ids = Vec::new();
+            let mut full_text = String::new();
+            for (idx, page_text) in pages.iter().enumerate() {
+                let trimmed = page_text.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let seg_id = insert_segment(
+                    conn,
+                    embedder,
+                    workspace_id,
+                    &entity.module,
+                    &entity_id,
+                    trimmed,
+                    None,
+                    None,
+                    Some((idx + 1) as u32),
+                    now,
+                )
+                .await?;
+                segment_ids.push(seg_id);
+                if !full_text.is_empty() {
+                    full_text.push_str("\n\n");
+                }
+                full_text.push_str(trimmed);
+            }
+
+            finish_completed(conn, store, workspace_id, &entity_id, &full_text, segment_ids, now).await
+        }
+        MimeRoute::Docx => {
+            let bytes = lifeos_vcs::read_blob(store, &blob_ref).map_err(IngestError::Io)?;
+            let text = docs_extract::extract_docx_text(&bytes).map_err(IngestError::Extraction)?;
+
+            let chunks = chunk_plain_text(&text);
+            let mut segment_ids = Vec::with_capacity(chunks.len());
+            for chunk in &chunks {
+                let seg_id = insert_segment(
+                    conn, embedder, workspace_id, &entity.module, &entity_id, chunk, None, None, None, now,
+                )
+                .await?;
+                segment_ids.push(seg_id);
+            }
+
+            finish_completed(conn, store, workspace_id, &entity_id, &text, segment_ids, now).await
         }
         MimeRoute::Unsupported { kind, blocked_by } => {
             finish_unsupported(conn, workspace_id, &entity_id, kind, blocked_by, now).await
@@ -596,6 +727,28 @@ mod tests {
         }
     }
 
+    struct MockCaptioner {
+        result: Result<String, String>,
+    }
+
+    #[async_trait]
+    impl Captioner for MockCaptioner {
+        async fn caption(&self, _image_bytes: &[u8], _mime: &str) -> Result<String, String> {
+            self.result.clone()
+        }
+    }
+
+    struct MockOcr {
+        result: Result<String, String>,
+    }
+
+    #[async_trait]
+    impl Ocr for MockOcr {
+        async fn extract_text(&self, _image_bytes: &[u8]) -> Result<String, String> {
+            self.result.clone()
+        }
+    }
+
     #[test]
     fn route_by_mime_dispatches_by_extension() {
         assert_eq!(route_by_mime("notes.txt", None), MimeRoute::PlainText);
@@ -610,13 +763,10 @@ mod tests {
             }
             other => panic!("expected Unsupported, got {other:?}"),
         }
-        match route_by_mime("cover.png", None) {
-            MimeRoute::Unsupported { kind, blocked_by } => {
-                assert_eq!(kind, "image");
-                assert!(blocked_by.contains("#90"));
-            }
-            other => panic!("expected Unsupported, got {other:?}"),
-        }
+        assert_eq!(route_by_mime("cover.png", None), MimeRoute::Image);
+        assert_eq!(route_by_mime("photo.jpg", None), MimeRoute::Image);
+        assert_eq!(route_by_mime("doc.pdf", None), MimeRoute::Pdf);
+        assert_eq!(route_by_mime("doc.docx", None), MimeRoute::Docx);
         match route_by_mime("weird.xyz", None) {
             MimeRoute::Unsupported { kind, blocked_by } => {
                 assert_eq!(kind, "unknown");
@@ -645,7 +795,7 @@ mod tests {
         let embedder = MockEmbedder::new();
         let transcriber = MockTranscriber { result: Ok(vec![]) };
         let payload = IngestJobPayload { entity_id: Some("ent_file".into()), ..Default::default() };
-        let outcome = process_ingest_job(&conn, &store, &embedder, &transcriber, "ws_1", payload, 100).await.unwrap();
+        let outcome = process_ingest_job(&conn, &store, &embedder, &transcriber, &NoopCaptioner, &NoopOcr, "ws_1", payload, 100).await.unwrap();
 
         let segment_ids = match outcome {
             IngestOutcome::Completed { segment_ids } => segment_ids,
@@ -698,7 +848,7 @@ mod tests {
         let embedder = MockEmbedder::new();
         let transcriber = MockTranscriber { result: Ok(vec![]) };
         let payload = IngestJobPayload { entity_id: Some("ent_clip".into()), ..Default::default() };
-        let outcome = process_ingest_job(&conn, &store, &embedder, &transcriber, "ws_1", payload, 100).await.unwrap();
+        let outcome = process_ingest_job(&conn, &store, &embedder, &transcriber, &NoopCaptioner, &NoopOcr, "ws_1", payload, 100).await.unwrap();
 
         match outcome {
             IngestOutcome::Unsupported { kind, blocked_by } => {
@@ -741,7 +891,7 @@ mod tests {
         let embedder = MockEmbedder::new();
         let transcriber = MockTranscriber { result: Ok(vec![]) };
         let payload = IngestJobPayload::default();
-        let result = process_ingest_job(&conn, &store, &embedder, &transcriber, "ws_1", payload, 100).await;
+        let result = process_ingest_job(&conn, &store, &embedder, &transcriber, &NoopCaptioner, &NoopOcr, "ws_1", payload, 100).await;
 
         assert!(matches!(result, Err(IngestError::MissingEntityId)));
     }
@@ -763,7 +913,7 @@ mod tests {
         let embedder = MockEmbedder::new();
         let transcriber = MockTranscriber { result: Ok(vec![]) };
         let payload = IngestJobPayload { entity_id: Some("ent_no_blob".into()), ..Default::default() };
-        let result = process_ingest_job(&conn, &store, &embedder, &transcriber, "ws_1", payload, 100).await;
+        let result = process_ingest_job(&conn, &store, &embedder, &transcriber, &NoopCaptioner, &NoopOcr, "ws_1", payload, 100).await;
 
         assert!(matches!(result, Err(IngestError::NoContent)));
     }
@@ -798,7 +948,7 @@ mod tests {
             ]),
         };
         let payload = IngestJobPayload { entity_id: Some("ent_clip".into()), ..Default::default() };
-        let outcome = process_ingest_job(&conn, &store, &embedder, &transcriber, "ws_1", payload, 100).await.unwrap();
+        let outcome = process_ingest_job(&conn, &store, &embedder, &transcriber, &NoopCaptioner, &NoopOcr, "ws_1", payload, 100).await.unwrap();
 
         let segment_ids = match outcome {
             IngestOutcome::Completed { segment_ids } => segment_ids,
@@ -848,7 +998,7 @@ mod tests {
         let embedder = MockEmbedder::new();
         let transcriber = MockTranscriber { result: Err("no whisper model configured".into()) };
         let payload = IngestJobPayload { entity_id: Some("ent_clip2".into()), ..Default::default() };
-        let result = process_ingest_job(&conn, &store, &embedder, &transcriber, "ws_1", payload, 100).await;
+        let result = process_ingest_job(&conn, &store, &embedder, &transcriber, &NoopCaptioner, &NoopOcr, "ws_1", payload, 100).await;
 
         assert!(matches!(result, Err(IngestError::Transcription(_))));
 
@@ -856,5 +1006,212 @@ mod tests {
         let count: i64 = seg_rows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(count, 0);
         assert!(embedder.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn image_produces_caption_and_ocr_segments_and_embeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ObjectStore::new(dir.path());
+        let conn = fresh_conn("test_ingest_image.db").await;
+
+        let blob_ref = lifeos_vcs::store_blob(&store, b"fake-png-bytes").unwrap();
+        insert_file_entity(&conn, "ent_img", "ws_1", "cover.png", &blob_ref).await;
+
+        let embedder = MockEmbedder::new();
+        let transcriber = MockTranscriber { result: Ok(vec![]) };
+        let captioner = MockCaptioner { result: Ok("a red bicycle leaning against a wall".into()) };
+        let ocr = MockOcr { result: Ok("SALE 50% OFF".into()) };
+        let payload = IngestJobPayload { entity_id: Some("ent_img".into()), ..Default::default() };
+        let outcome =
+            process_ingest_job(&conn, &store, &embedder, &transcriber, &captioner, &ocr, "ws_1", payload, 100)
+                .await
+                .unwrap();
+
+        let segment_ids = match outcome {
+            IngestOutcome::Completed { segment_ids } => segment_ids,
+            other => panic!("expected Completed, got {other:?}"),
+        };
+        assert_eq!(segment_ids.len(), 2);
+
+        let mut rows = conn
+            .query("SELECT json_extract(attrs,'$.text') FROM entities WHERE type='segment' ORDER BY id", ())
+            .await
+            .unwrap();
+        let mut texts = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            let text: String = row.get(0).unwrap();
+            texts.push(text);
+        }
+        assert!(texts.iter().any(|t| t.contains("bicycle")));
+        assert!(texts.iter().any(|t| t.contains("SALE 50% OFF")));
+        assert_eq!(embedder.calls.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn image_caption_failure_is_a_real_error_ocr_failure_degrades() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ObjectStore::new(dir.path());
+        let conn = fresh_conn("test_ingest_image_fail.db").await;
+
+        let blob_ref = lifeos_vcs::store_blob(&store, b"fake-png-bytes").unwrap();
+        insert_file_entity(&conn, "ent_img_fail", "ws_1", "cover.png", &blob_ref).await;
+
+        let embedder = MockEmbedder::new();
+        let transcriber = MockTranscriber { result: Ok(vec![]) };
+        let captioner = MockCaptioner { result: Err("no vision captioner configured".into()) };
+        let ocr = MockOcr { result: Ok(String::new()) };
+        let payload = IngestJobPayload { entity_id: Some("ent_img_fail".into()), ..Default::default() };
+        let result =
+            process_ingest_job(&conn, &store, &embedder, &transcriber, &captioner, &ocr, "ws_1", payload, 100).await;
+        assert!(matches!(result, Err(IngestError::Caption(_))));
+
+        // OCR failing must not fail the job - captioning alone still makes the image searchable.
+        let conn2 = fresh_conn("test_ingest_image_ocr_degrade.db").await;
+        insert_file_entity(&conn2, "ent_img_ocr", "ws_1", "cover.png", &blob_ref).await;
+        let captioner2 = MockCaptioner { result: Ok("a caption".into()) };
+        let ocr2 = MockOcr { result: Err("tesseract not found".into()) };
+        let payload2 = IngestJobPayload { entity_id: Some("ent_img_ocr".into()), ..Default::default() };
+        let outcome2 = process_ingest_job(
+            &conn2, &store, &embedder, &transcriber, &captioner2, &ocr2, "ws_1", payload2, 100,
+        )
+        .await
+        .unwrap();
+        match outcome2 {
+            IngestOutcome::Completed { segment_ids } => assert_eq!(segment_ids.len(), 1),
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// Builds a minimal single-content-stream PDF with real, byte-accurate
+    /// xref offsets (computed here rather than hardcoded) so `pdf-extract`
+    /// can parse it without a binary fixture file.
+    fn synth_pdf_bytes(page_texts: &[&str]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let mut offsets = Vec::new();
+        buf.extend_from_slice(b"%PDF-1.4\n");
+
+        offsets.push(buf.len());
+        buf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+
+        let page_obj_start = 3;
+        let kids: String =
+            (0..page_texts.len()).map(|i| format!("{} 0 R ", page_obj_start + i)).collect::<Vec<_>>().join("");
+        offsets.push(buf.len());
+        buf.extend_from_slice(
+            format!("2 0 obj\n<< /Type /Pages /Kids [{}] /Count {} >>\nendobj\n", kids.trim(), page_texts.len())
+                .as_bytes(),
+        );
+
+        let font_obj = page_obj_start + page_texts.len();
+        for i in 0..page_texts.len() {
+            let obj_num = page_obj_start + i;
+            offsets.push(buf.len());
+            buf.extend_from_slice(
+                format!(
+                    "{obj_num} 0 obj\n<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 {font_obj} 0 R >> >> /MediaBox [0 0 612 792] /Contents {} 0 R >>\nendobj\n",
+                    font_obj + 1 + i
+                )
+                .as_bytes(),
+            );
+        }
+
+        offsets.push(buf.len());
+        buf.extend_from_slice(
+            format!("{font_obj} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n").as_bytes(),
+        );
+
+        for (i, text) in page_texts.iter().enumerate() {
+            let obj_num = font_obj + 1 + i;
+            let content = format!("BT /F1 24 Tf 72 712 Td ({text}) Tj ET");
+            offsets.push(buf.len());
+            buf.extend_from_slice(
+                format!("{obj_num} 0 obj\n<< /Length {} >>\nstream\n{content}\nendstream\nendobj\n", content.len())
+                    .as_bytes(),
+            );
+        }
+
+        let xref_start = buf.len();
+        let total_objs = offsets.len() + 1;
+        buf.extend_from_slice(format!("xref\n0 {total_objs}\n").as_bytes());
+        buf.extend_from_slice(b"0000000000 65535 f \n");
+        for off in &offsets {
+            buf.extend_from_slice(format!("{off:010} 00000 n \n").as_bytes());
+        }
+        buf.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {total_objs} /Root 1 0 R >>\nstartxref\n{xref_start}\n%%EOF",
+            )
+            .as_bytes(),
+        );
+        buf
+    }
+
+    #[tokio::test]
+    async fn pdf_produces_per_page_segments_with_page_locator() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ObjectStore::new(dir.path());
+        let conn = fresh_conn("test_ingest_pdf.db").await;
+
+        let blob_ref = lifeos_vcs::store_blob(&store, &synth_pdf_bytes(&["Hello PDF", "Second page text"])).unwrap();
+        insert_file_entity(&conn, "ent_pdf", "ws_1", "report.pdf", &blob_ref).await;
+
+        let embedder = MockEmbedder::new();
+        let transcriber = MockTranscriber { result: Ok(vec![]) };
+        let payload = IngestJobPayload { entity_id: Some("ent_pdf".into()), ..Default::default() };
+        let outcome = process_ingest_job(
+            &conn, &store, &embedder, &transcriber, &NoopCaptioner, &NoopOcr, "ws_1", payload, 100,
+        )
+        .await
+        .unwrap();
+
+        let segment_ids = match outcome {
+            IngestOutcome::Completed { segment_ids } => segment_ids,
+            other => panic!("expected Completed, got {other:?}"),
+        };
+        assert_eq!(segment_ids.len(), 2);
+
+        let mut rows = conn
+            .query(
+                "SELECT json_extract(attrs,'$.page'), json_extract(attrs,'$.text') FROM entities \
+                 WHERE type='segment' ORDER BY json_extract(attrs,'$.page')",
+                (),
+            )
+            .await
+            .unwrap();
+        let row1 = rows.next().await.unwrap().unwrap();
+        let page1: i64 = row1.get(0).unwrap();
+        let text1: String = row1.get(1).unwrap();
+        assert_eq!(page1, 1);
+        assert!(text1.contains("Hello PDF"));
+
+        let row2 = rows.next().await.unwrap().unwrap();
+        let page2: i64 = row2.get(0).unwrap();
+        assert_eq!(page2, 2);
+    }
+
+    #[tokio::test]
+    async fn docx_produces_paragraph_segments() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ObjectStore::new(dir.path());
+        let conn = fresh_conn("test_ingest_docx.db").await;
+
+        let bytes = docs_extract::tests_support::synth_docx_bytes(&["First paragraph", "Second paragraph"]);
+        let blob_ref = lifeos_vcs::store_blob(&store, &bytes).unwrap();
+        insert_file_entity(&conn, "ent_docx", "ws_1", "notes.docx", &blob_ref).await;
+
+        let embedder = MockEmbedder::new();
+        let transcriber = MockTranscriber { result: Ok(vec![]) };
+        let payload = IngestJobPayload { entity_id: Some("ent_docx".into()), ..Default::default() };
+        let outcome = process_ingest_job(
+            &conn, &store, &embedder, &transcriber, &NoopCaptioner, &NoopOcr, "ws_1", payload, 100,
+        )
+        .await
+        .unwrap();
+
+        let segment_ids = match outcome {
+            IngestOutcome::Completed { segment_ids } => segment_ids,
+            other => panic!("expected Completed, got {other:?}"),
+        };
+        assert_eq!(segment_ids.len(), 2);
     }
 }
