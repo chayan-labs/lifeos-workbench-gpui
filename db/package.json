@@ -8,7 +8,9 @@
   "exports": {
     ".": "./dist/schema.js",
     "./client/worker": "./dist/client.worker.js",
-    "./client/mac": "./dist/client.mac.js"
+    "./client/mac": "./dist/client.mac.js",
+    "./client/local": "./dist/client.local.js",
+    "./query": "./dist/query.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

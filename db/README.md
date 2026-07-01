@@ -28,6 +28,18 @@ const db = createMacDb({
 Both return a `drizzle()` instance bound to the shared `schema.ts` tables - query with the
 Drizzle query builder, not raw SQL, at JS call sites.
 
+**Always import query builders (`and`/`eq`/`sql`/...) from `@lifeos/db/query`, never from
+`"drizzle-orm"` directly**, in any package that also depends on `@lifeos/db` (issue #64).
+drizzle-orm brands its `Column`/`SQL` types with private/protected fields; a second,
+independently-installed copy of `drizzle-orm` (which npm gives you by default across
+separate `package.json`s with no workspace hoisting) produces types that fail to
+structurally match this package's tables, even though the code is otherwise correct.
+
+`./client/local` (`createLocalDb`) spins up a throwaway in-memory or file-backed SQLite DB
+against this package's own schema/drizzle-orm instance - for tests only (see
+`worker/test/entities.test.ts`), not a third production tier alongside `client.worker.ts`/
+`client.mac.ts`.
+
 ## Build
 
 ```

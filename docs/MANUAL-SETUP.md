@@ -283,6 +283,26 @@ Telegram bot token to actually go live:
    criteria ("bot responds to a message on the deployed Worker") that needs a live deploy;
    everything else is covered by `worker/test/*.test.ts`.
 
+### #64 - Turso + Haiku secrets for the bot's DB/LLM bindings
+
+`worker/src/db.ts` (workspace-scoped Drizzle queries over `@lifeos/db/client/worker`) and
+`worker/src/llm.ts` (Haiku via `@anthropic-ai/sdk`) are committed and covered by
+`worker/test/entities.test.ts`/`llm.test.ts` (an in-memory libSQL DB and a stubbed
+`fetch`, no live services touched). Not yet wired into any bot command - that's #65.
+Getting the real bindings live (once #65 lands) needs three more Worker secrets,
+alongside #63's `BOT_TOKEN`:
+
+```sh
+npx wrangler secret put TURSO_URL          # e.g. libsql://<db>-<org>.turso.io - same DB the Mac API writes to
+npx wrangler secret put TURSO_TOKEN        # Turso auth token
+npx wrangler secret put ANTHROPIC_API_KEY  # Haiku key for the bot's own reasoning
+```
+
+`WORKSPACE_ID` is a non-secret var (`wrangler.toml`'s `[vars]`) and defaults to
+`"default-personal-workspace"` if left unset - the same default
+`services/lifeos-api/src/config.rs::DEFAULT_WORKSPACE` uses, so the bot and the SPA/API
+read and write the same rows until real multi-user auth exists (phase 7).
+
 **:warning: Read this before running any `act` you approve:** the browser
 actuator can do anything a logged-in you can on the sites it has a captured
 session for - it is `docs/SECURITY.md` §4's most powerful and most dangerous

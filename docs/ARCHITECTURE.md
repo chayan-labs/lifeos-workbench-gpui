@@ -117,6 +117,23 @@ capture/query commands, or approve/deny keyboards yet - those are #64-67. Deploy
 real (Cloudflare account + a live Telegram bot token from @BotFather) is a manual step; see
 `docs/MANUAL-SETUP.md` #63.
 
+**Implemented (issue #64):** `worker/src/db.ts` binds `@lifeos/db/client/worker`
+(`@libsql/client/web`, HTTP-only transport) and resolves the acting workspace from
+`env.WORKSPACE_ID`, falling back to the same `"default-personal-workspace"` id
+`services/lifeos-api/src/config.rs::DEFAULT_WORKSPACE` uses - never from Telegram input, so
+the bot can't be tricked into reading/writing another tenant's rows. `src/entities.ts` is
+the workspace-scoped repository (`listEntities`/`createEntity`, every query
+`WHERE workspace_id = ?`); `src/llm.ts` wraps `@anthropic-ai/sdk` for Haiku calls. Both are
+tested against a real in-memory libSQL DB (`@lifeos/db/client/local`, sharing this
+package's own `drizzle-orm` instance via `@lifeos/db/query` - two independently-installed
+copies of `drizzle-orm` produce structurally incompatible branded types, so every
+`@lifeos/db` consumer must import query builders from `@lifeos/db/query`, not
+`"drizzle-orm"` directly) and a stubbed `fetch` respectively - `worker/test/entities.test.ts`
+asserts cross-workspace isolation directly. Not yet wired into a bot command (no live
+network call happens on a real Telegram message) - that lands in #65 alongside capture/query
+commands; the real `TURSO_URL`/`TURSO_TOKEN`/`ANTHROPIC_API_KEY` secrets are a manual step,
+`docs/MANUAL-SETUP.md` #64.
+
 ### 3.2 Heavy brain (Mac)
 
 The existing Claude Code harness does deep work: study authoring, coding, trade analysis, the self-extension builder, integration-heavy design/marketing work, media ingestion, agent pipelines, and the Eval/Release loop.

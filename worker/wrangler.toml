@@ -6,4 +6,12 @@ main = "src/index.ts"
 compatibility_date = "2026-07-01"
 
 # Secrets (never committed - set via `wrangler secret put <NAME>`):
-#   BOT_TOKEN  - Telegram bot token from @BotFather
+#   BOT_TOKEN          - Telegram bot token from @BotFather
+#   TURSO_URL          - canonical DB HTTP URL (libsql://...), issue #64
+#   TURSO_TOKEN        - Turso auth token, workspace-scoped queries only
+#   ANTHROPIC_API_KEY  - Haiku key for the bot's own reasoning (issue #64)
+
+# Vars (non-secret, can live in this file):
+#   WORKSPACE_ID - defaults to "default-personal-workspace" if unset (db.ts)
+[vars]
+# WORKSPACE_ID = "default-personal-workspace"

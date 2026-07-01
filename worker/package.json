@@ -10,7 +10,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "grammy": "^1.44.0"
+    "@anthropic-ai/sdk": "^0.109.0",
+    "@lifeos/db": "file:../db",
+    "grammy": "^1.44.0",
+    "ulid": "^3.0.2"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260701.1",

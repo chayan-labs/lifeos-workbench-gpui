@@ -7,6 +7,13 @@ import { createBot } from "./bot.js";
 
 export interface Env {
   BOT_TOKEN: string;
+  // DB + Haiku bindings (issue #64) - unused by fetch() until #65 wires
+  // capture/query commands, but declared here so wrangler.toml's secrets
+  // line up with what db.ts/llm.ts expect.
+  TURSO_URL: string;
+  TURSO_TOKEN: string;
+  ANTHROPIC_API_KEY: string;
+  WORKSPACE_ID?: string;
 }
 
 export default {
