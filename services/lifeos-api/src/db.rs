@@ -257,6 +257,7 @@ mod tests {
             gowa_basic_auth: None,
             gowa_webhook_secret: None,
             browser_script_path: None,
+            vcs_blob_root: format!("{path}.blobs"),
         }
     }
 

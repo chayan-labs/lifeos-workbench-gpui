@@ -45,6 +45,9 @@ pub struct AppState {
     /// production (`None` only appears in tests that want `/api/reading/*`
     /// to surface NotImplemented).
     pub reading: Option<Arc<dyn ArticleFetcher>>,
+    /// lifeos-vcs CAS object store (issue #81/#86). Needs no credentials, so
+    /// unlike the connectors above this is always present.
+    pub vcs_store: Arc<lifeos_vcs::ObjectStore>,
 }
 
 impl AppState {

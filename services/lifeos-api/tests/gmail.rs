@@ -50,6 +50,7 @@ async fn test_app() -> TestApp {
         gowa_basic_auth: None,
         gowa_webhook_secret: None,
         browser_script_path: None,
+    vcs_blob_root: format!("{db_path}.blobs"),
     };
     let nango = Arc::new(MockNangoClient::new());
     let state = build_state_with_nango(config, Some(nango.clone())).await.expect("build state");
@@ -154,6 +155,7 @@ async fn without_nango_configured_sync_returns_not_implemented() {
         gowa_basic_auth: None,
         gowa_webhook_secret: None,
         browser_script_path: None,
+    vcs_blob_root: format!("{db_path}.blobs"),
     };
     let state = build_state_with_nango(config, None).await.expect("build state");
     let router = routes::router(state);

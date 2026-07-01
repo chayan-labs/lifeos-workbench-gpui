@@ -1,10 +1,10 @@
 //! Planned routes the frontend declares but whose services aren't built in the
 //! base. Honest behavior, never a silent mock:
 //!   - ingest / pipeline.run  -> enqueue a real job, return 202 + job_id
-//!   - vcs.* / broker.*        -> 501 Not Implemented
 //!
-//! As `lifeos-ingest` / `lifeos-pipelines` / `lifeos-vcs` come online in later
-//! phases, these enqueue paths already feed them via the job queue.
+//! As `lifeos-ingest` / `lifeos-pipelines` come online in later phases, these
+//! enqueue paths already feed them via the job queue. `vcs.*` used to route
+//! here as a 501 stub; it's now real (`routes/vcs.rs`, issue #86).
 
 use crate::auth::resolve_workspace;
 use crate::db::workspace_exists;
@@ -61,9 +61,4 @@ pub async fn pipeline_run(
     let payload = json!({ "pipeline": req.pipeline, "input": req.input });
     let job_id = super::job::enqueue(&state, &workspace_id, "pipeline", &payload, 0).await?;
     Ok((StatusCode::ACCEPTED, Json(json!({ "status": "queued", "job_id": job_id }))))
-}
-
-/// 501 for routes whose service genuinely isn't built in the base.
-pub async fn not_implemented() -> ApiError {
-    ApiError::NotImplemented("not implemented in the base - planned for a later phase".into())
 }

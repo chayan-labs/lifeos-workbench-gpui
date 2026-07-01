@@ -4,6 +4,7 @@ use crate::cli::{ConfigCmd, FileCmd};
 use crate::client::{CliError, Client};
 use crate::config::CliConfig;
 use crate::output::Output;
+use base64::Engine as _;
 use reqwest::Method;
 use serde_json::{json, Value};
 
@@ -31,23 +32,29 @@ pub async fn metrics(client: &Client, out: Output) -> Result<(), CliError> {
     Ok(())
 }
 
-/// `file` maps to the lifeos-vcs HTTP surface. Those endpoints are 501 until
-/// the VCS service lands (issues #81-#87); the CLI surfaces that honestly
-/// rather than pretending. Still allow-listed: history (read) + commit (write).
+/// `file` maps to the real lifeos-vcs HTTP surface (issue #86, building on
+/// #81-#85): commit (read a local path, upload the bytes), history (a plain
+/// query over `version.created` events), checkout (retrieval by hash - no
+/// separate mutating verb, and no history-rewrite verb exists at all, per
+/// docs/AGENT-CONTROL.md §1).
 pub async fn file(client: &Client, out: Output, cmd: FileCmd) -> Result<(), CliError> {
     match cmd {
         FileCmd::History { entity_id } => {
-            let q = vec![("entity_id", entity_id.unwrap_or_default())];
+            let q = vec![("entity_id", entity_id)];
             let v = client.request(Method::GET, "/api/vcs/history", &q, None).await?;
             out.ok("history", &v);
         }
-        FileCmd::Commit {
-            path,
-            message,
-            entity_id,
-        } => {
+        FileCmd::Commit { path, message, entity_id } => {
+            let bytes = std::fs::read(&path).map_err(|e| CliError::Local(format!("cannot read '{path}': {e}")))?;
+            let name = std::path::Path::new(&path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.clone());
+            let content_base64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+
             let mut body = serde_json::Map::new();
-            body.insert("path".into(), Value::String(path));
+            body.insert("name".into(), Value::String(name));
+            body.insert("content_base64".into(), Value::String(content_base64));
             if let Some(m) = message {
                 body.insert("message".into(), Value::String(m));
             }
@@ -58,6 +65,15 @@ pub async fn file(client: &Client, out: Output, cmd: FileCmd) -> Result<(), CliE
                 .request(Method::POST, "/api/vcs/commit", &[], Some(Value::Object(body)))
                 .await?;
             out.ok("committed", &v);
+        }
+        FileCmd::Checkout { entity_id, blob_ref, out: out_path } => {
+            let q = vec![("entity_id", entity_id), ("blob_ref", blob_ref.unwrap_or_default())];
+            let bytes = client.request_raw(Method::GET, "/api/vcs/checkout", &q).await?;
+            std::fs::write(&out_path, &bytes).map_err(|e| CliError::Local(format!("cannot write '{out_path}': {e}")))?;
+            out.ok(
+                &format!("checked out {} bytes to {out_path}", bytes.len()),
+                &json!({ "out": out_path, "bytes": bytes.len() }),
+            );
         }
     }
     Ok(())

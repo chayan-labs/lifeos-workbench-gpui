@@ -67,6 +67,10 @@ pub struct Config {
     /// means `/api/browser/*` and `/api/connections/browser/session` return
     /// NotImplemented rather than pretending a browser actuator is wired up.
     pub browser_script_path: Option<String>,
+    /// Root directory for the lifeos-vcs CAS object store (issue #81/#86).
+    /// Needs no credentials, so unlike the connectors above this is always
+    /// wired - see `routes/vcs.rs`.
+    pub vcs_blob_root: String,
 }
 
 impl Config {
@@ -124,6 +128,8 @@ impl Config {
 
         let browser_script_path = std::env::var("BROWSER_ACTUATOR_SCRIPT").ok().filter(|s| !s.is_empty());
 
+        let vcs_blob_root = std::env::var("LIFEOS_VCS_BLOB_ROOT").unwrap_or_else(|_| "lifeos-blobs".to_string());
+
         Self {
             db_path,
             turso_url,
@@ -143,6 +149,7 @@ impl Config {
             gowa_basic_auth,
             gowa_webhook_secret,
             browser_script_path,
+            vcs_blob_root,
         }
     }
 }

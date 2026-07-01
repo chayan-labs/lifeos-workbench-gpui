@@ -212,15 +212,28 @@ pub enum JobCmd {
 pub enum FileCmd {
     History {
         #[arg(long)]
-        entity_id: Option<String>,
+        entity_id: String,
     },
     Commit {
+        /// Local file to read content from - the CLI encodes and uploads
+        /// the bytes, it never asks the API to read a client-side path.
         #[arg(long)]
         path: String,
         #[arg(long)]
         message: Option<String>,
+        /// Existing file entity id to commit a new version onto; omit to create a new file.
         #[arg(long)]
         entity_id: Option<String>,
+    },
+    /// Retrieves a version's content by hash - the entity's current version
+    /// by default, or a specific historical `--blob-ref` from `history`.
+    Checkout {
+        #[arg(long)]
+        entity_id: String,
+        #[arg(long)]
+        blob_ref: Option<String>,
+        #[arg(long)]
+        out: String,
     },
 }
 

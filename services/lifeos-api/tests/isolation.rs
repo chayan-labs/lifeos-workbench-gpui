@@ -51,6 +51,7 @@ async fn test_app() -> TestApp {
     gowa_basic_auth: None,
     gowa_webhook_secret: None,
     browser_script_path: None,
+    vcs_blob_root: format!("{db_path}.blobs"),
     };
     let state = build_state(config).await.expect("build state");
     TestApp {

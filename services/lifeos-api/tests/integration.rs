@@ -46,6 +46,7 @@ async fn test_app() -> TestApp {
     gowa_basic_auth: None,
     gowa_webhook_secret: None,
     browser_script_path: None,
+    vcs_blob_root: format!("{db_path}.blobs"),
     };
     let state = build_state(config).await.expect("build state");
     TestApp {
@@ -360,10 +361,41 @@ async fn planned_routes_are_honest() {
     .await;
     assert_eq!(st, StatusCode::ACCEPTED);
     assert_eq!(body["status"], "queued");
+}
 
-    // vcs history is honestly not implemented -> 501 (not a silent mock).
-    let (st, _) = send(&app.router, "GET", "/api/vcs/history", None).await;
-    assert_eq!(st, StatusCode::NOT_IMPLEMENTED);
+/// `/api/vcs/*` used to be a 501 stub here; it's real now (issue #86) -
+/// commit -> history -> checkout end-to-end through the actual CAS store.
+#[tokio::test]
+async fn vcs_routes_version_a_file_end_to_end() {
+    let app = test_app().await;
+    use base64::Engine as _;
+    let content_base64 = base64::engine::general_purpose::STANDARD.encode(b"hello vcs");
+
+    let (st, commit_body) = send(
+        &app.router,
+        "POST",
+        "/api/vcs/commit",
+        Some(json!({"name": "notes.txt", "content_base64": content_base64, "message": "first"})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let entity_id = commit_body["id"].as_str().unwrap().to_string();
+    let blob_ref = commit_body["blob_ref"].as_str().unwrap().to_string();
+
+    let (st, history_body) = send(&app.router, "GET", &format!("/api/vcs/history?entity_id={entity_id}"), None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(history_body.as_array().unwrap().len(), 1);
+    assert_eq!(history_body[0]["blob_ref"], blob_ref);
+
+    let request = Request::builder()
+        .method("GET")
+        .uri(format!("/api/vcs/checkout?entity_id={entity_id}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(&bytes[..], b"hello vcs");
 }
 
 #[tokio::test]

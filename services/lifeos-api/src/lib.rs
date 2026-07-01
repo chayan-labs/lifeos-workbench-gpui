@@ -164,6 +164,7 @@ async fn build_state_with_clients(
 ) -> Result<AppState, libsql::Error> {
     let db = db::connect(&config).await?;
     let agents = agents::detect();
+    let vcs_store = Arc::new(lifeos_vcs::ObjectStore::new(config.vcs_blob_root.clone()));
     Ok(AppState {
         conn: Arc::new(db.conn),
         database: Arc::new(db.database),
@@ -174,5 +175,6 @@ async fn build_state_with_clients(
         whatsapp,
         browser,
         reading,
+        vcs_store,
     })
 }

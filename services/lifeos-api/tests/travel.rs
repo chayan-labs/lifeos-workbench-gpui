@@ -41,6 +41,7 @@ fn base_config(db_path: &str) -> Config {
         gowa_basic_auth: None,
         gowa_webhook_secret: None,
         browser_script_path: None,
+    vcs_blob_root: format!("{db_path}.blobs"),
     }
 }
 

@@ -23,6 +23,7 @@ mod search;
 mod slack;
 mod stream;
 mod travel;
+mod vcs;
 mod whatsapp;
 mod workspace;
 
@@ -92,6 +93,11 @@ pub fn router(state: AppState) -> Router {
         //     commits (issue #58) ---
         .route("/api/drive/sync", post(drive::sync))
         .route("/api/files/commit", post(files::commit))
+        // --- Generic lifeos-vcs CLI surface (issue #86): commit/history/checkout,
+        //     the first real byte-persisting callers of the CAS + commit model ---
+        .route("/api/vcs/commit", post(vcs::commit))
+        .route("/api/vcs/history", get(vcs::history))
+        .route("/api/vcs/checkout", get(vcs::checkout))
         .route("/api/notion/list", get(notion::list))
         .route("/api/notion/create", post(notion::create))
         // --- Notion module: two-way sync in/back (issue #59) ---
@@ -120,8 +126,6 @@ pub fn router(state: AppState) -> Router {
         // --- planned routes: enqueue where it makes sense, honest 501 otherwise ---
         .route("/api/ingest", post(planned::ingest))
         .route("/api/pipeline/run", post(planned::pipeline_run))
-        .route("/api/vcs/history", get(planned::not_implemented))
-        .route("/api/vcs/commit", post(planned::not_implemented))
         // --- read-only broker positions proxy (issue #51) - no order route exists ---
         .route("/api/broker/positions", get(kite::positions))
         .with_state(state)

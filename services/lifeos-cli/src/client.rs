@@ -103,4 +103,35 @@ impl Client {
         }
         serde_json::from_str(&text).map_err(|e| CliError::Parse(e.to_string()))
     }
+
+    /// Like `request`, but returns the raw response body instead of parsing
+    /// it as JSON - for endpoints like `/api/vcs/checkout` that return file
+    /// bytes directly.
+    pub async fn request_raw(&self, method: Method, path: &str, query: &[(&str, String)]) -> Result<Vec<u8>, CliError> {
+        let url = format!("{}{}", self.settings.api_url, path);
+        let mut req = self.http.request(method, &url);
+
+        let filtered: Vec<(&str, String)> = query.iter().filter(|(_, v)| !v.is_empty()).cloned().collect();
+        if !filtered.is_empty() {
+            req = req.query(&filtered);
+        }
+        if let Some(token) = &self.settings.token {
+            req = req.bearer_auth(token);
+        }
+        if let Some(ws) = &self.settings.workspace {
+            req = req.header("X-Workspace-Id", ws);
+        }
+
+        let resp = req.send().await.map_err(|e| CliError::Connection(e.to_string()))?;
+        let status = resp.status();
+        let bytes = resp.bytes().await.map_err(|e| CliError::Connection(e.to_string()))?;
+
+        if !status.is_success() {
+            return Err(CliError::Api {
+                status: status.as_u16(),
+                body: String::from_utf8_lossy(&bytes).to_string(),
+            });
+        }
+        Ok(bytes.to_vec())
+    }
 }
