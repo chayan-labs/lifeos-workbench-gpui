@@ -127,8 +127,8 @@ pub async fn build_state_with_whatsapp(
     build_state_with_clients(config, nango, kite, whatsapp, browser, reading).await
 }
 
-/// Same as `build_state`, but with an explicit browser actuator (or `None`)
-/// - lets tests inject `browser::mock::MockBrowserActuator`. Other clients
+/// Same as `build_state`, but with an explicit browser actuator (or `None`),
+/// letting tests inject `browser::mock::MockBrowserActuator`. Other clients
 /// are still wired from `config` if configured.
 pub async fn build_state_with_browser(
     config: Config,
@@ -141,8 +141,8 @@ pub async fn build_state_with_browser(
     build_state_with_clients(config, nango, kite, whatsapp, browser, reading).await
 }
 
-/// Same as `build_state`, but with an explicit article fetcher (or `None`)
-/// - lets tests inject `reading::mock::MockArticleFetcher` instead of
+/// Same as `build_state`, but with an explicit article fetcher (or `None`),
+/// letting tests inject `reading::mock::MockArticleFetcher` instead of
 /// hitting the real network. Other clients are still wired from `config` if
 /// configured.
 pub async fn build_state_with_reading(

@@ -59,6 +59,7 @@ pub struct VersionEntry {
 /// callers read it via `history` (the latest entry) or their own entity
 /// fetch; this function doesn't look it up itself, keeping it a single
 /// write path with no read-then-write race.
+#[allow(clippy::too_many_arguments)] // mirrors the version.created event columns
 pub async fn commit_version(
     conn: &Connection,
     workspace_id: &str,

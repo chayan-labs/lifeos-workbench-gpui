@@ -106,7 +106,7 @@ pub async fn list(
     sql.push_str(&format!(" ORDER BY created_at DESC LIMIT {limit}"));
 
     let rows = state.conn.query(&sql, libsql::params_from_iter(binds)).await?;
-    Ok(Json(collect(rows, |r| read_edge(r)).await?))
+    Ok(Json(collect(rows, read_edge).await?))
 }
 
 #[derive(Deserialize)]

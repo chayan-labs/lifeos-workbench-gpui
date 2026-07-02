@@ -140,7 +140,7 @@ pub async fn list(
     sql.push_str(&format!(" ORDER BY created_at DESC LIMIT {limit} OFFSET {offset}"));
 
     let rows = state.conn.query(&sql, libsql::params_from_iter(binds)).await?;
-    Ok(Json(collect(rows, |r| read_entity(r)).await?))
+    Ok(Json(collect(rows, read_entity).await?))
 }
 
 pub async fn get_one(

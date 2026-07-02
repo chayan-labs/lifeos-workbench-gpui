@@ -1,8 +1,8 @@
 //! Release-loop candidate configs (`/api/configs`, issue #98,
 //! docs/HARNESS-LOOP.md §4). A candidate moves `draft -> shadow ->
 //! promoted|rejected`. The active pointer per `kind` is a `vcs_refs` row
-//! (`kind='config_active', name=<configs.kind>, snapshot_ref=<configs.id>`)
-//! - the same named-pointer/atomic-flip shape `lifeos-vcs` branches/tags
+//! (`kind='config_active', name=<configs.kind>, snapshot_ref=<configs.id>`),
+//! the same named-pointer/atomic-flip shape `lifeos-vcs` branches/tags
 //! already use (issue #84), reused here rather than a second pointer
 //! table. `promote`/`rollback` are the only writes that flip the active
 //! pointer, and both emit an `events` row - nothing here auto-activates;

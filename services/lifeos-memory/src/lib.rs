@@ -14,7 +14,7 @@
 //! - `gate`       self-RAG gate + multi-hop detector (deterministic) [§4]
 //! - `graph`      petgraph spreading activation, 1-2 hops, tiered [§4]
 //! - `consolidate` sleep jobs: segment/consolidate/importance/surprise/
-//!                 decay/supersede - all writing events, never mutating [§5]
+//!   decay/supersede - all writing events, never mutating [§5]
 //! - `compiler`   deterministic token-budgeted context compiler [§6]
 //! - `tier`       cold-tier migration to storage backends + promote [§7]
 //! - `procedural` behavioral-rule store feeding the system prompt [§8]

@@ -137,9 +137,9 @@ pub async fn recall(
     lanes.push(fts_lane(conn, workspace_id, query, pool).await);
     lanes.push(like_lane(conn, workspace_id, query, pool).await?);
     lanes.push(entity_lane(conn, workspace_id, query, pool).await?);
-    match vector.search(workspace_id, query, pool).await {
-        Ok(hits) => lanes.push(hits.into_iter().map(|h| (h.id, h.rank)).collect()),
-        Err(_) => {} // vector lane is best-effort by design
+    // Vector lane is best-effort by design - errors just drop the lane.
+    if let Ok(hits) = vector.search(workspace_id, query, pool).await {
+        lanes.push(hits.into_iter().map(|h| (h.id, h.rank)).collect());
     }
 
     // RRF fusion -> relevance per candidate id.

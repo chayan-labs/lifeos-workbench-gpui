@@ -4,7 +4,7 @@
 //! - `POST /api/memory/recall`   activation-scored recall (+ point-in-time)
 //! - `POST /api/memory/context`  compiled, token-budgeted working memory
 //! - `POST /api/memory/ingest`   append an observation event from ANY source
-//!                               (terminal hook, script, bot relay, UI)
+//!   (terminal hook, script, bot relay, UI)
 //! - `POST /api/memory/sleep`    run one consolidation cycle now
 //! - `POST /api/memory/rebuild`  wipe read models + replay from `events`
 //! - `POST /api/memory/tier`     cold-tier sweep to the primary storage backend

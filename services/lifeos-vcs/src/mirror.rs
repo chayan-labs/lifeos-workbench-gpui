@@ -57,7 +57,7 @@ impl From<BackendError> for MirrorError {
                 format!("object {hash} not found on mirror"),
             )),
             BackendError::Other(msg) => {
-                MirrorError::Io(std::io::Error::new(std::io::ErrorKind::Other, msg))
+                MirrorError::Io(std::io::Error::other(msg))
             }
         }
     }

@@ -45,7 +45,7 @@ fn snapshot_err_to_gc_err(e: SnapshotError) -> GcError {
         SnapshotError::Io(e) => GcError::Io(e),
         SnapshotError::Serde(e) => GcError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
         SnapshotError::TagImmutable { name } => {
-            GcError::Io(std::io::Error::new(std::io::ErrorKind::Other, format!("unexpected tag error for {name}")))
+            GcError::Io(std::io::Error::other(format!("unexpected tag error for {name}")))
         }
     }
 }

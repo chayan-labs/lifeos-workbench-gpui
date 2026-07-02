@@ -53,7 +53,7 @@ pub async fn modules(
                 Ok(r) => r,
                 Err(e) => { tracing::warn!("module stream query failed: {e}"); continue; }
             };
-            let events = match collect(rows, |r| read_event(r)).await {
+            let events = match collect(rows, read_event).await {
                 Ok(e) => e,
                 Err(e) => { tracing::warn!("module stream decode failed: {e:?}"); continue; }
             };

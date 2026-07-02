@@ -292,6 +292,7 @@ async fn apply_domain_event(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // one column per arg; a struct here is ceremony
 async fn insert_edge(
     conn: &Connection,
     ws: &str,
