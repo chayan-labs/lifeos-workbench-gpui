@@ -1,3 +1,4 @@
+mod backend;
 mod blob;
 mod chunk;
 mod commit;
@@ -8,6 +9,7 @@ mod mirror;
 mod snapshot;
 mod store;
 
+pub use backend::{BackendError, ExternalObjectStoreBackend, LocalFsBackend, StorageBackend};
 pub use blob::{read_blob, store_blob, BlobManifest};
 pub use chunk::{chunk_reader, ChunkRef};
 pub use commit::{commit_version, history, VersionEntry};

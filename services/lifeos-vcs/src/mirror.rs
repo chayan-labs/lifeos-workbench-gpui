@@ -1,22 +1,24 @@
-//! Out-of-band blob mirroring to R2/S3 (issue #83, docs/VERSIONING.md §2.1
-//! and §5, CLAUDE.md hard rules): blobs sync via R2/S3, never through the
-//! libSQL replica. `object_store` gives one trait over S3-compatible
-//! backends (R2 is S3-compatible), so `AmazonS3Builder` pointed at an R2
-//! endpoint is the real production path; tests below stand a
-//! `LocalFileSystem` backend in for "remote" so the mirror/pull/integrity
-//! logic is fully exercised without needing live R2 credentials in CI - the
-//! same "implement for real, defer the live-service check to
-//! docs/MANUAL-SETUP.md" boundary already used for the Nango/Kite/WhatsApp
-//! connectors.
+//! Out-of-band blob mirroring (issue #83, generalized by issue #105): blobs
+//! sync via a [`StorageBackend`], never through the libSQL replica
+//! (docs/VERSIONING.md §2.1/§5, CLAUDE.md hard rules).
+//!
+//! Historically this module talked to R2/S3 directly; it is now a thin
+//! compatibility wrapper over [`ExternalObjectStoreBackend`]
+//! (docs/STORAGE-BACKENDS.md §2) so the mirror is just "one more backend" -
+//! the put/get/integrity logic lives in `backend.rs` and is shared with every
+//! other user-chosen backend. `AmazonS3Builder` pointed at an R2 endpoint
+//! remains the real production path; tests stand a `LocalFileSystem` remote
+//! in so the mirror/pull/integrity logic is exercised without live R2
+//! credentials in CI (the same boundary used for the Nango/Kite connectors,
+//! docs/MANUAL-SETUP.md).
 
 use std::fmt;
 use std::sync::Arc;
 
 use object_store::aws::AmazonS3Builder;
-use object_store::path::Path as ObjectPath;
-use object_store::{ObjectStore as ExternalObjectStore, PutPayload};
+use object_store::ObjectStore as ExternalObjectStore;
 
-use crate::hash::hash_bytes;
+use crate::backend::{BackendError, ExternalObjectStoreBackend, StorageBackend};
 use crate::store::ObjectStore;
 
 #[derive(Debug)]
@@ -42,15 +44,34 @@ impl fmt::Display for MirrorError {
 
 impl std::error::Error for MirrorError {}
 
+impl From<BackendError> for MirrorError {
+    fn from(e: BackendError) -> Self {
+        match e {
+            BackendError::IntegrityMismatch { expected, actual } => {
+                MirrorError::IntegrityMismatch { expected, actual }
+            }
+            BackendError::Store(e) => MirrorError::Store(e),
+            BackendError::Io(e) => MirrorError::Io(e),
+            BackendError::NotFound { hash } => MirrorError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("object {hash} not found on mirror"),
+            )),
+            BackendError::Other(msg) => {
+                MirrorError::Io(std::io::Error::new(std::io::ErrorKind::Other, msg))
+            }
+        }
+    }
+}
+
 /// Out-of-band mirror of the local CAS onto an S3-compatible remote (R2 in
 /// production). Holds no local filesystem state of its own.
 pub struct BlobMirror {
-    inner: Arc<dyn ExternalObjectStore>,
+    backend: ExternalObjectStoreBackend,
 }
 
 impl BlobMirror {
     pub fn new(inner: Arc<dyn ExternalObjectStore>) -> Self {
-        Self { inner }
+        Self { backend: ExternalObjectStoreBackend::new(inner) }
     }
 
     /// Builds a mirror against Cloudflare R2 from env vars: `R2_BUCKET`,
@@ -74,38 +95,15 @@ impl BlobMirror {
         Ok(Self::new(Arc::new(s3)))
     }
 
-    fn object_path(hash: &str) -> ObjectPath {
-        ObjectPath::from(format!("objects/{}/{}", &hash[..2], hash))
-    }
-
     /// Mirrors one object to the remote, keyed by its content hash.
     pub async fn mirror_object(&self, hash: &str, data: &[u8]) -> Result<(), MirrorError> {
-        self.inner
-            .put(&Self::object_path(hash), PutPayload::from(data.to_vec()))
-            .await
-            .map_err(MirrorError::Store)?;
-        Ok(())
+        Ok(self.backend.put(hash, data).await?)
     }
 
     /// Pulls an object from the remote and verifies its BLAKE3 hash matches
     /// `hash` before returning it.
     pub async fn pull_object(&self, hash: &str) -> Result<Vec<u8>, MirrorError> {
-        let result = self
-            .inner
-            .get(&Self::object_path(hash))
-            .await
-            .map_err(MirrorError::Store)?;
-        let bytes = result.bytes().await.map_err(MirrorError::Store)?;
-        let data = bytes.to_vec();
-
-        let actual = hash_bytes(&data);
-        if actual != hash {
-            return Err(MirrorError::IntegrityMismatch {
-                expected: hash.to_string(),
-                actual,
-            });
-        }
-        Ok(data)
+        Ok(self.backend.get(hash).await?)
     }
 }
 
@@ -128,6 +126,7 @@ pub async fn pull_on_demand(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hash::hash_bytes;
     use object_store::local::LocalFileSystem;
 
     fn mirror_backed_by(dir: &std::path::Path) -> BlobMirror {

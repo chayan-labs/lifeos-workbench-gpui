@@ -2053,6 +2053,7 @@ dependencies = [
 name = "lifeos-vcs"
 version = "1.0.0"
 dependencies = [
+ "async-trait",
  "blake3",
  "bytes",
  "fastcdc",
