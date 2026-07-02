@@ -116,6 +116,24 @@ A module is already a validated, self-contained manifest ([SELF-EXTENSION.md](./
 - **Build:** 🦀 Rust for sign/verify (ed25519) inside the `lifeos` API; validators reused from Phase 5.
 - This is the multi-tenant distribution channel.
 
+**Implemented (issues #101/#102):** `services/lifeos-api/src/marketplace_sign.rs`
+does the ed25519 sign/verify (a tampered manifest's changed bytes fail
+`verify()` - no separate tamper-detection logic needed); `routes/marketplace.rs`
+exposes `GET /api/marketplace/pubkey`, `POST /api/marketplace/publish`
+(structural check - `manifest.id`/`manifest.version` must match the request -
+then sign and store), `GET /api/marketplace/packages`, `POST
+/api/marketplace/verify`, and `POST /api/marketplace/install` (re-verifies
+the stored signature before recording a `marketplace.installed` event).
+`module_packages` (migration `0009_marketplace.sql`) is the registry table
+this base uses in place of a separate Turso table + R2 blob. The signing key
+comes from `LIFEOS_MARKETPLACE_SIGNING_SEED`; publish/verify honestly 501
+until it's set, same posture as Nango/Kite/GOWA. The **render validator**
+(headless-Chromium boot) and the **install-as-git-commit** step stay in the
+Node scaffold layer (`server/scaffold.js`, `server/validators/render.js`,
+docs/SELF-EXTENSION.md §4) - this route covers the marketplace half only.
+Frontend: `frontend/src/pages/Marketplace.jsx` (publish form + browse/install
+list), routed at `/marketplace`.
+
 ---
 
 ## 5. PWA (rich mobile beyond Telegram)
@@ -125,6 +143,22 @@ A module is already a validated, self-contained manifest ([SELF-EXTENSION.md](./
 - **Auth:** `frontend/src/lib` auth path (session + workspace) - no-op locally, real for SaaS.
 - **Offline:** reads from a local cache / IndexedDB mirror; writes spool to `store/` and reconcile via the single-writer + events-as-truth model ([DATA-MODEL.md](./DATA-MODEL.md) §4).
 - **Build:** JS/PWA; the Worker serves push.
+
+**Implemented (issue #103):** `frontend/public/manifest.webmanifest` +
+`frontend/public/sw.js` (installable app shell: caches the shell + does
+stale-while-revalidate on `GET /api/*` so the embedded-replica read model
+stays browsable offline - writes are never cached or served from cache) +
+`index.html`'s `<link rel="manifest">` + `main.jsx` registering the service
+worker. `POST /api/push/subscribe` / `POST /api/push/unsubscribe`
+(`services/lifeos-api/src/routes/push.rs`, `push_subscriptions` table,
+migration `0010_push_subscriptions.sql`) store Web Push subscriptions -
+`Profile.jsx`'s "Enable Push" button drives the real browser Push API
+subscribe flow into this endpoint. **Deferred:** actually sending a push
+(VAPID-signed, mirroring the Telegram digest) needs a VAPID keypair + sender
+this base doesn't wire up yet - `sw.js`'s `push` event handler is ready to
+receive one once that lands. Real app icons (`icon-192.png`/`icon-512.png`)
+are also a follow-up; the manifest references them but no binary assets
+ship in this base.
 
 ---
 

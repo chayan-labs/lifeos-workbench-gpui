@@ -71,6 +71,19 @@ pub struct Config {
     /// Needs no credentials, so unlike the connectors above this is always
     /// wired - see `routes/vcs.rs`.
     pub vcs_blob_root: String,
+    /// ed25519 signing key for the module marketplace (issue #101,
+    /// `LIFEOS_MARKETPLACE_SIGNING_SEED`, base64 32-byte seed). `None` means
+    /// `/api/marketplace/publish` returns NotImplemented rather than
+    /// signing with an implicit, unconfigured key.
+    pub marketplace_signing_key: Option<ed25519_dalek::SigningKey>,
+    /// Turso platform account API token (distinct from `turso_token`, which
+    /// authenticates to one already-provisioned database) - needed to
+    /// create a new database-per-workspace (issue #104). `None` means
+    /// `/api/workspace/provision-db` returns NotImplemented.
+    pub turso_platform_api_token: Option<String>,
+    /// Turso organization slug the platform API provisions new databases
+    /// under.
+    pub turso_org_slug: Option<String>,
 }
 
 impl Config {
@@ -130,6 +143,20 @@ impl Config {
 
         let vcs_blob_root = std::env::var("LIFEOS_VCS_BLOB_ROOT").unwrap_or_else(|_| "lifeos-blobs".to_string());
 
+        let marketplace_signing_key = std::env::var("LIFEOS_MARKETPLACE_SIGNING_SEED")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .and_then(|s| match crate::marketplace_sign::parse_signing_key(&s) {
+                Ok(key) => Some(key),
+                Err(e) => {
+                    tracing::error!("LIFEOS_MARKETPLACE_SIGNING_SEED is set but invalid: {e} - marketplace publish/sign will stay disabled");
+                    None
+                }
+            });
+
+        let turso_platform_api_token = std::env::var("TURSO_PLATFORM_API_TOKEN").ok().filter(|s| !s.is_empty());
+        let turso_org_slug = std::env::var("TURSO_ORG_SLUG").ok().filter(|s| !s.is_empty());
+
         Self {
             db_path,
             turso_url,
@@ -150,6 +177,9 @@ impl Config {
             gowa_webhook_secret,
             browser_script_path,
             vcs_blob_root,
+            marketplace_signing_key,
+            turso_platform_api_token,
+            turso_org_slug,
         }
     }
 }

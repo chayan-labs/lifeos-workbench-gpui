@@ -46,7 +46,8 @@ Revised from the original §10 to reflect the tools we adopt (which compress sev
 - → *everything versioned, searchable, logged, scored, auto-improved; boundaries enforced.*
 
 ## Phase 7 - SaaS hardening (when needed)
-- Real auth/sessions; **PWA** (service worker + Web Push); **module marketplace** (publish/sign/install); database-per-workspace swap; plan/quota gating; billing.
+- Real auth/sessions; **PWA** (service worker + Web Push); **module marketplace** (publish/sign/install); database-per-workspace swap.
+- **No billing/quota gating by design** - this is a self-hosted, bring-your-own-database-and-AI-model project with no product to meter or bill (issue #104).
 - → *flip from personal to multi-tenant product.*
 
 **Implemented (issue #100):** `users.password_hash` (argon2id) + a new
@@ -68,6 +69,19 @@ sessions are a new stateful layer behind the existing stateless JWT, not
 a replacement for it. Frontend `LoginPage.jsx` now calls the real
 `/api/login`/`/api/register` routes instead of a client-side demo
 credential check.
+
+**Implemented (issues #101-#104):** the rest of Phase 7 minus billing.
+ed25519 marketplace sign/verify + publish/browse/install routes
+(`marketplace_sign.rs`, `routes/marketplace.rs`, `module_packages`) with a
+`Marketplace.jsx` frontend page. PWA app shell + offline-read service
+worker + Web Push subscription storage (`public/manifest.webmanifest`,
+`public/sw.js`, `routes/push.rs`, `push_subscriptions`) - actual VAPID push
+delivery stays deferred (see `docs/PLATFORM-SYSTEMS.md` §5). Database-per-
+workspace provisioning via the Turso platform API plus a per-workspace
+AES-256-GCM envelope key (`routes/workspace_db.rs`, `workspace_databases`,
+`workspaces.envelope_key_enc`). The `plans`/`subscriptions` billing/quota
+catalog stub (never read by any route) was dropped entirely rather than
+built out - see `docs/SECURITY.md` §5's note on issue #104.
 
 ---
 

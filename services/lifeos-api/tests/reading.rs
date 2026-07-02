@@ -46,6 +46,9 @@ fn base_config(db_path: &str) -> Config {
         gowa_webhook_secret: None,
         browser_script_path: None,
     vcs_blob_root: format!("{db_path}.blobs"),
+    marketplace_signing_key: None,
+            turso_platform_api_token: None,
+            turso_org_slug: None,
     }
 }
 

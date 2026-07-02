@@ -14,11 +14,13 @@ mod job;
 mod kite;
 mod llm;
 mod login;
+mod marketplace;
 mod metrics;
 mod module_request;
 mod notion;
 mod pipeline;
 mod planned;
+mod push;
 mod reading;
 mod register;
 mod edge;
@@ -29,6 +31,7 @@ mod travel;
 mod vcs;
 mod whatsapp;
 mod workspace;
+mod workspace_db;
 
 use crate::state::AppState;
 use axum::{
@@ -151,5 +154,17 @@ pub fn router(state: AppState) -> Router {
         .route("/api/configs/:id/shadow", post(configs::shadow))
         .route("/api/configs/:id/promote", post(configs::promote))
         .route("/api/configs/rollback", post(configs::rollback))
+        // --- module marketplace: publish/sign/install (issues #101/#102) ---
+        .route("/api/marketplace/pubkey", get(marketplace::pubkey))
+        .route("/api/marketplace/publish", post(marketplace::publish))
+        .route("/api/marketplace/packages", get(marketplace::list))
+        .route("/api/marketplace/verify", post(marketplace::verify))
+        .route("/api/marketplace/install", post(marketplace::install))
+        // --- PWA Web Push subscriptions (issue #103) ---
+        .route("/api/push/subscribe", post(push::subscribe))
+        .route("/api/push/unsubscribe", post(push::unsubscribe))
+        // --- database-per-workspace provisioning (issue #104) ---
+        .route("/api/workspace/provision-db", post(workspace_db::provision))
+        .route("/api/workspace/database", get(workspace_db::get_database))
         .with_state(state)
 }

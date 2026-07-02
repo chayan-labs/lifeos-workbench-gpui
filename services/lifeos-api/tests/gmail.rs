@@ -51,6 +51,9 @@ async fn test_app() -> TestApp {
         gowa_webhook_secret: None,
         browser_script_path: None,
     vcs_blob_root: format!("{db_path}.blobs"),
+    marketplace_signing_key: None,
+            turso_platform_api_token: None,
+            turso_org_slug: None,
     };
     let nango = Arc::new(MockNangoClient::new());
     let state = build_state_with_nango(config, Some(nango.clone())).await.expect("build state");
@@ -156,6 +159,9 @@ async fn without_nango_configured_sync_returns_not_implemented() {
         gowa_webhook_secret: None,
         browser_script_path: None,
     vcs_blob_root: format!("{db_path}.blobs"),
+    marketplace_signing_key: None,
+            turso_platform_api_token: None,
+            turso_org_slug: None,
     };
     let state = build_state_with_nango(config, None).await.expect("build state");
     let router = routes::router(state);

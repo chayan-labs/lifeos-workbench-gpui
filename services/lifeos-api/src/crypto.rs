@@ -56,6 +56,14 @@ pub fn decrypt(blob: &str, key: &EncryptionKey) -> Result<String, ApiError> {
     String::from_utf8(plaintext).map_err(|_| ApiError::Internal("decrypted secret_enc is not valid UTF-8".into()))
 }
 
+/// Generates a fresh random 32-byte envelope key (per-workspace envelope
+/// keys, issue #104 - `docs/DATA-MODEL.md` §4, `docs/SECURITY.md` §5).
+pub fn random_key() -> EncryptionKey {
+    let mut key = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut key);
+    key
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -18,6 +18,7 @@ const GraphView = lazy(() => import('./pages/GraphView'));
 const InstalledModulePage = lazy(() => import('./pages/InstalledModulePage'));
 const ModuleDashboards = lazy(() => import('./pages/ModuleDashboards'));
 const AgentLedger = lazy(() => import('./pages/AgentLedger'));
+const Marketplace = lazy(() => import('./pages/Marketplace'));
 
 const PageFallback = () => (
   <div style={{ padding: '2rem', textAlign: 'center', color: '#888' }}>Loading...</div>
@@ -160,6 +161,14 @@ export default function App() {
           element={
             <Layout onLogout={handleLogout}>
               <AgentLedger />
+            </Layout>
+          }
+        />
+        <Route
+          path="/marketplace"
+          element={
+            <Layout onLogout={handleLogout}>
+              <Marketplace />
             </Layout>
           }
         />

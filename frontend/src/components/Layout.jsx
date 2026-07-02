@@ -28,6 +28,7 @@ import {
   Sparkles,
   History,
   Gauge,
+  Store,
   Mail,
   Calendar,
   FolderOpen,
@@ -136,6 +137,7 @@ export default function Layout({ children, onLogout }) {
       items: [
         { name: 'Harness', href: '/harness', icon: Boxes },
         { name: 'Storage & VCS', href: '/storage', icon: FolderGit2 },
+        { name: 'Marketplace', href: '/marketplace', icon: Store },
         { name: 'Refine Demo', href: '/refine-demo', icon: Boxes },
       ],
     },

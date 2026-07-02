@@ -60,6 +60,9 @@ async fn test_app(with_browser: bool) -> TestApp {
         gowa_webhook_secret: None,
         browser_script_path: with_browser.then(|| "scripts/browser_actuator.py".to_string()),
     vcs_blob_root: format!("{db_path}.blobs"),
+    marketplace_signing_key: None,
+            turso_platform_api_token: None,
+            turso_org_slug: None,
     };
     let browser = Arc::new(MockBrowserActuator::new());
     let state = build_state_with_browser(config, if with_browser { Some(browser.clone()) } else { None })

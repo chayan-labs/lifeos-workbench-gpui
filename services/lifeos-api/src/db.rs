@@ -30,6 +30,23 @@ const MIGRATION_AUTH_PASSWORD: &str = include_str!("../../../migrations/0007_aut
 /// `sessions` (refresh-token rotation, issue #100) - a new `CREATE TABLE IF
 /// NOT EXISTS`, naturally idempotent.
 const MIGRATION_AUTH_SESSIONS: &str = include_str!("../../../migrations/0008_auth_sessions.sql");
+/// `module_packages` (marketplace publish/install, issues #101/#102) - a new
+/// `CREATE TABLE IF NOT EXISTS`, naturally idempotent.
+const MIGRATION_MARKETPLACE: &str = include_str!("../../../migrations/0009_marketplace.sql");
+/// `push_subscriptions` (PWA Web Push, issue #103) - a new `CREATE TABLE IF
+/// NOT EXISTS`, naturally idempotent.
+const MIGRATION_PUSH_SUBSCRIPTIONS: &str = include_str!("../../../migrations/0010_push_subscriptions.sql");
+/// `workspaces.envelope_key_enc` (database-per-workspace, issue #104) -
+/// `ALTER TABLE ADD COLUMN`, guarded by `add_column_if_missing`.
+const MIGRATION_WORKSPACE_ENVELOPE_KEY: &str =
+    include_str!("../../../migrations/0011_workspace_envelope_key.sql");
+/// `workspace_databases` (issue #104) - a new `CREATE TABLE IF NOT EXISTS`,
+/// naturally idempotent.
+const MIGRATION_WORKSPACE_DATABASES: &str = include_str!("../../../migrations/0012_workspace_databases.sql");
+/// Drops the unused billing/quota seam (`plans`/`subscriptions`, issue #104) -
+/// this is a self-hosted, bring-your-own-database project with no product to
+/// meter or bill. `DROP TABLE IF EXISTS` is naturally idempotent.
+const MIGRATION_REMOVE_BILLING: &str = include_str!("../../../migrations/0013_remove_billing.sql");
 
 /// The canonical DB plus its live connection. `database` is retained by the caller
 /// so the embedded-replica's background replicator stays alive (dropping it would
@@ -157,6 +174,11 @@ pub async fn run_migrations(conn: &Connection) -> Result<(), libsql::Error> {
     conn.execute_batch(MIGRATION_RELEASE_CONFIGS).await?;
     add_column_if_missing(conn, "users", "password_hash", MIGRATION_AUTH_PASSWORD).await?;
     conn.execute_batch(MIGRATION_AUTH_SESSIONS).await?;
+    conn.execute_batch(MIGRATION_MARKETPLACE).await?;
+    conn.execute_batch(MIGRATION_PUSH_SUBSCRIPTIONS).await?;
+    add_column_if_missing(conn, "workspaces", "envelope_key_enc", MIGRATION_WORKSPACE_ENVELOPE_KEY).await?;
+    conn.execute_batch(MIGRATION_WORKSPACE_DATABASES).await?;
+    conn.execute_batch(MIGRATION_REMOVE_BILLING).await?;
     tracing::info!("migrations applied (core + control plane)");
     Ok(())
 }
@@ -191,19 +213,8 @@ async fn add_column_if_missing(
 pub async fn seed(conn: &Connection) -> Result<(), libsql::Error> {
     let now = now_secs();
 
-    // Billing catalog: the 'free' plan must exist because workspaces default to
-    // plan='free'. Stub limits; SaaS later gates modules/quota off this JSON.
-    let plan_exists = scalar_exists(conn, "SELECT 1 FROM plans WHERE id = ?1", "free").await?;
-    if !plan_exists {
-        tracing::info!("seeding default 'free' plan");
-        conn.execute(
-            "INSERT INTO plans (id, name, price_cents, currency, limits, created_at, updated_at) \
-             VALUES ('free', 'Free', 0, 'usd', '{}', ?1, ?2)",
-            libsql::params![now, now],
-        )
-        .await?;
-    }
-
+    // No billing/quota catalog to seed (issue #104 removed it) - `plan` on
+    // workspaces stays a free-text label only, never gated on.
     let exists = scalar_exists(conn, "SELECT 1 FROM workspaces WHERE id = ?1", DEFAULT_WORKSPACE).await?;
     if !exists {
         tracing::info!("seeding default personal workspace");
@@ -270,6 +281,9 @@ mod tests {
             gowa_webhook_secret: None,
             browser_script_path: None,
             vcs_blob_root: format!("{path}.blobs"),
+            marketplace_signing_key: None,
+            turso_platform_api_token: None,
+            turso_org_slug: None,
         }
     }
 
@@ -302,8 +316,10 @@ mod tests {
         assert_eq!(count(&conn, "SELECT COUNT(*) FROM workspaces").await, 1);
         assert_eq!(count(&conn, "SELECT COUNT(*) FROM users").await, 1);
         assert_eq!(count(&conn, "SELECT COUNT(*) FROM memberships WHERE role='owner'").await, 1);
-        // Billing catalog seeded with the 'free' plan (control-plane stub).
-        assert_eq!(count(&conn, "SELECT COUNT(*) FROM plans WHERE id='free'").await, 1);
+        // Billing/quota catalog removed entirely (issue #104) - no 'plans'/
+        // 'subscriptions' tables to seed or assert on.
+        let mut rows = conn.query("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('plans','subscriptions')", ()).await.unwrap();
+        assert!(rows.next().await.unwrap().is_none(), "plans/subscriptions tables must be dropped");
 
         let _ = std::fs::remove_file(path);
     }

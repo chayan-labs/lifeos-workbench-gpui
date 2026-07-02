@@ -513,3 +513,27 @@ one `pipeline.stage.completed` event per stage up through `verify`, then a
 final `pipeline.stage.gated` event (`gated=1`) and a `pending_approval`
 entity for `publish` - the run always halts there, it never calls a real
 social-post provider.
+
+### #101/#102 - module marketplace signing key
+
+```bash
+openssl rand -base64 32   # -> LIFEOS_MARKETPLACE_SIGNING_SEED
+```
+
+Without this set, `POST /api/marketplace/publish` and `GET /api/marketplace/pubkey`
+honestly 501 rather than signing with an implicit key - same posture as
+`LIFEOS_SECRET_ENCRYPTION_KEY`/Kite/GOWA above. `POST /api/marketplace/verify`
+and `POST /api/marketplace/install` need no key (verification only needs the
+public key already embedded in the request/package).
+
+### #104 - database-per-workspace provisioning
+
+```bash
+export TURSO_PLATFORM_API_TOKEN="..."   # Turso account-level API token (turso auth token)
+export TURSO_ORG_SLUG="your-org-slug"
+```
+
+Distinct from `TURSO_TOKEN` (which authenticates to one already-provisioned
+database, §Phase 1). Without both set, `POST /api/workspace/provision-db`
+honestly 501s. No plan/quota gating anywhere in this path - see
+`docs/SECURITY.md` §5.

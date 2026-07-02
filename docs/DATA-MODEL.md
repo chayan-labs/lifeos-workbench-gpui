@@ -9,7 +9,7 @@ This document specifies every table, the sync semantics (corrected against real 
 ## 1. Two planes
 
 - **Data plane** - the generic graph every module writes into (`entities`, `edges`, `events`, `annotations`, `jobs`, `module_requests`).
-- **Control plane** - SaaS-ready tenancy/identity/credentials/billing (`workspaces`, `users`, `memberships`, `connections`, `subscriptions`, `plans`).
+- **Control plane** - SaaS-ready tenancy/identity/credentials (`workspaces`, `users`, `memberships`, `connections`, `sessions`, `workspace_databases`). No billing/quota tables by design (issue #104) - self-hosted, bring-your-own-database-and-AI-model, nothing to meter.
 
 Both are in the canonical `lifeos.db` (Turso/libSQL).
 Derived state (FTS5, vectors) is **not** here - it lives in a separate, never-synced `lifeos-derived.db` (see §5).
@@ -138,11 +138,12 @@ versus deferred to #78 (the live drain loop that actually calls these against a 
 
 | Table | Purpose |
 |---|---|
-| `workspaces` | Tenant. Personal = one seeded row. Carries plan/limits. |
+| `workspaces` | Tenant. Personal = one seeded row. `plan` is a free-text label only - never gated on (issue #104: no billing/quota system). `envelope_key_enc` (issue #104) is a per-workspace AES-256-GCM key, itself encrypted under the server's master key. |
 | `users` | Identity. Personal = one row. |
 | `memberships` | `user_id ↔ workspace_id` + role (owner/admin/member). |
 | `connections` | Per-workspace, per-account integration credential **handles** - now primarily a **Nango `connectionId` + provider + account_handle + scopes + status**, plus an encrypted envelope for the few non-Nango secrets (Kite daily token, WhatsApp). OAuth tokens themselves live in Nango, never here in plaintext, never in agent context. Supports many accounts per provider. |
-| `subscriptions` / `plans` | Billing seam (stub now; gates module/quota access in SaaS). |
+| `sessions` | Refresh-token rotation for real login (issue #100) - see `docs/SECURITY.md` §5. |
+| `workspace_databases` | Database-per-workspace provisioning record (issue #104) - Turso db name/url + an auth token encrypted under that workspace's own `envelope_key_enc`, never the shared master key alone. |
 
 ```sql
 CREATE TABLE connections (

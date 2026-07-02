@@ -21,14 +21,9 @@ impl Drop for TestApp {
     }
 }
 
-async fn test_app() -> TestApp {
-    let db_path = std::env::temp_dir()
-        .join(format!("lifeos_{}.db", new_id("t")))
-        .to_string_lossy()
-        .to_string();
-    let _ = std::fs::remove_file(&db_path);
-    let config = Config {
-        db_path: db_path.clone(),
+fn base_config(db_path: &str) -> Config {
+    Config {
+        db_path: db_path.to_string(),
         turso_url: None,
         turso_token: None,
         sync_interval_secs: 60,
@@ -39,15 +34,43 @@ async fn test_app() -> TestApp {
         agent_timeout_secs: 30,
         nango_server_url: None,
         nango_secret_key: None,
-    kite_api_key: None,
-    kite_api_secret: None,
-    secret_encryption_key: None,
-    gowa_base_url: None,
-    gowa_basic_auth: None,
-    gowa_webhook_secret: None,
-    browser_script_path: None,
-    vcs_blob_root: format!("{db_path}.blobs"),
-    };
+        kite_api_key: None,
+        kite_api_secret: None,
+        secret_encryption_key: None,
+        gowa_base_url: None,
+        gowa_basic_auth: None,
+        gowa_webhook_secret: None,
+        browser_script_path: None,
+        vcs_blob_root: format!("{db_path}.blobs"),
+        marketplace_signing_key: None,
+        turso_platform_api_token: None,
+        turso_org_slug: None,
+    }
+}
+
+async fn test_app() -> TestApp {
+    let db_path = std::env::temp_dir()
+        .join(format!("lifeos_{}.db", new_id("t")))
+        .to_string_lossy()
+        .to_string();
+    let _ = std::fs::remove_file(&db_path);
+    let state = build_state(base_config(&db_path)).await.expect("build state");
+    TestApp {
+        router: routes::router(state),
+        db_path,
+    }
+}
+
+/// Same as `test_app`, but with a marketplace signing key configured so
+/// `/api/marketplace/publish` doesn't 501.
+async fn test_app_with_marketplace() -> TestApp {
+    let db_path = std::env::temp_dir()
+        .join(format!("lifeos_{}.db", new_id("t")))
+        .to_string_lossy()
+        .to_string();
+    let _ = std::fs::remove_file(&db_path);
+    let mut config = base_config(&db_path);
+    config.marketplace_signing_key = Some(lifeos_api::marketplace_sign::generate_signing_key());
     let state = build_state(config).await.expect("build state");
     TestApp {
         router: routes::router(state),
@@ -854,4 +877,151 @@ async fn config_rollback_with_no_prior_promotion_is_rejected() {
     )
     .await;
     assert_eq!(st, StatusCode::BAD_REQUEST);
+}
+
+/// Issue #101: marketplace publish/verify are honest 501 without a
+/// configured signing key, rather than signing with an implicit key.
+#[tokio::test]
+async fn marketplace_publish_is_not_implemented_without_a_signing_key() {
+    let app = test_app().await;
+    let (st, _) = send(
+        &app.router,
+        "POST",
+        "/api/marketplace/publish",
+        Some(json!({"module_id": "reading", "version": "1.0.0", "manifest": {"id": "reading", "version": "1.0.0"}})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::NOT_IMPLEMENTED);
+}
+
+/// Issues #101/#102: publish signs a manifest, install re-verifies it, and
+/// a tampered manifest fails verification rather than silently installing.
+#[tokio::test]
+async fn marketplace_publish_verify_install_and_tamper_detection() {
+    let app = test_app_with_marketplace().await;
+    let manifest = json!({"id": "reading", "version": "1.0.0", "views": ["list"]});
+
+    let (st, published) = send(
+        &app.router,
+        "POST",
+        "/api/marketplace/publish",
+        Some(json!({"module_id": "reading", "version": "1.0.0", "manifest": manifest})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let package_id = published["package_id"].as_str().unwrap().to_string();
+    let signature = published["signature"].as_str().unwrap().to_string();
+    let pubkey = published["pubkey"].as_str().unwrap().to_string();
+
+    // Publish rejects a manifest.id/version mismatch (structural check).
+    let (st, _) = send(
+        &app.router,
+        "POST",
+        "/api/marketplace/publish",
+        Some(json!({"module_id": "reading", "version": "1.0.0", "manifest": {"id": "wrong", "version": "1.0.0"}})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+
+    // The published package appears in the browse listing.
+    let (st, listed) = send(&app.router, "GET", "/api/marketplace/packages", None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(listed["packages"].as_array().unwrap().len(), 1);
+
+    // Direct verify: correct manifest+signature+pubkey passes.
+    let (st, verified) = send(
+        &app.router,
+        "POST",
+        "/api/marketplace/verify",
+        Some(json!({"manifest": manifest, "signature": signature, "pubkey": pubkey})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(verified["valid"], true);
+
+    // A tampered manifest fails verification (issue #101 acceptance).
+    let tampered = json!({"id": "reading", "version": "9.9.9", "views": ["list"]});
+    let (st, verified) = send(
+        &app.router,
+        "POST",
+        "/api/marketplace/verify",
+        Some(json!({"manifest": tampered, "signature": signature, "pubkey": pubkey})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(verified["valid"], false);
+
+    // Install re-verifies the stored package and records the event.
+    let (st, installed) = send(
+        &app.router,
+        "POST",
+        "/api/marketplace/install",
+        Some(json!({"package_id": package_id})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(installed["installed"], true);
+
+    let (_, events) = send(&app.router, "GET", "/api/event?type=marketplace.installed", None).await;
+    assert_eq!(events.as_array().unwrap().len(), 1);
+
+    // Installing an unknown package -> 404.
+    let (st, _) = send(
+        &app.router,
+        "POST",
+        "/api/marketplace/install",
+        Some(json!({"package_id": "pkg_does_not_exist"})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+}
+
+/// Issue #101: `/api/marketplace/pubkey` exposes the platform's public key
+/// once configured.
+#[tokio::test]
+async fn marketplace_pubkey_is_exposed_once_configured() {
+    let app = test_app_with_marketplace().await;
+    let (st, body) = send(&app.router, "GET", "/api/marketplace/pubkey", None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(body["pubkey"].as_str().unwrap().len() > 10);
+}
+
+/// Issue #103: subscribe is idempotent (re-subscribing the same endpoint
+/// upserts, doesn't duplicate) and unsubscribe removes it.
+#[tokio::test]
+async fn push_subscribe_upserts_and_unsubscribe_removes() {
+    let app = test_app().await;
+    let sub = json!({"endpoint": "https://push.example/abc", "keys": {"p256dh": "x", "auth": "y"}});
+
+    let (st, body) = send(&app.router, "POST", "/api/push/subscribe", Some(sub.clone())).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(body["subscribed"], true);
+
+    // Re-subscribing the same endpoint is a no-op upsert, not an error.
+    let (st, _) = send(&app.router, "POST", "/api/push/subscribe", Some(sub)).await;
+    assert_eq!(st, StatusCode::OK);
+
+    let (st, body) = send(
+        &app.router,
+        "POST",
+        "/api/push/unsubscribe",
+        Some(json!({"endpoint": "https://push.example/abc"})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(body["unsubscribed"], true);
+}
+
+/// Issue #104: no billing/quota gating - `/api/workspace/provision-db` is
+/// an honest 501 without Turso platform credentials, never a fake success,
+/// and there is no plan/quota check anywhere in the path.
+#[tokio::test]
+async fn provision_db_is_not_implemented_without_turso_platform_credentials() {
+    let app = test_app().await;
+    let (st, _) = send(&app.router, "POST", "/api/workspace/provision-db", Some(json!({}))).await;
+    assert_eq!(st, StatusCode::NOT_IMPLEMENTED);
+
+    let (st, body) = send(&app.router, "GET", "/api/workspace/database", None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(body["provisioned"], false);
 }

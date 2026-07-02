@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
-  User, Building2, KeyRound, Save, Check, CreditCard, Gauge,
-  ShieldCheck, Database, Boxes, FolderGit2, Crown, ShieldAlert, Lock, Wand2, Repeat
+  User, Building2, KeyRound, Save, Check, Gauge, Bell,
+  ShieldCheck, Database, Boxes, FolderGit2, ShieldAlert, Lock, Wand2, Repeat
 } from 'lucide-react';
 import { LAYERS } from '../lib/capabilities';
 import { getCapabilityMatrix } from '../lib/capabilityMatrix';
@@ -9,21 +9,15 @@ import { apiCall, WORKSPACE_ID_KEY } from '../lib/api';
 
 const read = (k, fallback = '') => localStorage.getItem(k) || fallback;
 
-const PLANS = [
-  { id: 'free', name: 'Personal', price: 'Free', features: ['1 workspace', 'Local Mac harness', 'Unlimited modules'] },
-  { id: 'pro', name: 'Pro', price: '$19/mo', features: ['5 workspaces', 'Cloud bot lane', 'Priority codegen'] },
-  { id: 'team', name: 'Team', price: '$49/seat', features: ['Unlimited workspaces', 'Shared modules', 'SSO + audit log'] },
-];
-
 export default function Profile() {
   const [workspaceIdInput, setWorkspaceIdInput] = useState(read(WORKSPACE_ID_KEY, 'default-personal-workspace'));
-  const [workspace, setWorkspace] = useState(null); // { id, name, plan } from GET /api/workspace
+  const [workspace, setWorkspace] = useState(null); // { id, name } from GET /api/workspace
   const [workspaceName, setWorkspaceName] = useState('');
-  const [activePlan, setActivePlan] = useState('free');
   const [me, setMe] = useState(null); // GET /api/me - { authenticated, id, email, name }
   const [usageRaw, setUsageRaw] = useState(null); // GET /api/metrics
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [pushStatus, setPushStatus] = useState('disabled');
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -35,7 +29,6 @@ export default function Profile() {
     if (wsRes.ok) {
       setWorkspace(wsRes.data);
       setWorkspaceName(wsRes.data.name);
-      setActivePlan(wsRes.data.plan || 'free');
     }
     if (meRes.ok) setMe(meRes.data);
     if (metricsRes.ok) setUsageRaw(metricsRes.data);
@@ -53,11 +46,34 @@ export default function Profile() {
   };
 
   const handleSave = async () => {
-    const { ok, data } = await apiCall('PATCH', '/api/workspace', { name: workspaceName.trim(), plan: activePlan });
+    const { ok, data } = await apiCall('PATCH', '/api/workspace', { name: workspaceName.trim() });
     if (ok) {
       setWorkspace(data);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
+    }
+  };
+
+  // PWA Web Push (issue #103) - subscribes via the browser Push API and
+  // stores the subscription server-side (POST /api/push/subscribe). No
+  // VAPID applicationServerKey is wired up yet, so this best-effort
+  // no-ops with a warning where that's required; still lets the storage
+  // half be exercised end-to-end.
+  const handleEnablePush = async () => {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      console.warn('Push notifications are not supported in this browser.');
+      return;
+    }
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.subscribe({ userVisibleOnly: true });
+      const { ok } = await apiCall('POST', '/api/push/subscribe', {
+        endpoint: subscription.endpoint,
+        keys: subscription.toJSON().keys,
+      });
+      if (ok) setPushStatus('enabled');
+    } catch (err) {
+      console.warn('push subscribe failed', err);
     }
   };
 
@@ -84,7 +100,6 @@ export default function Profile() {
           <p className="neo-body-md text-neo-text-muted">{email}</p>
           <div className="flex flex-wrap gap-2 mt-2 justify-center sm:justify-start">
             <span className="neo-tag bg-neo-mint text-neo-text"><ShieldCheck size={12} /> Verified owner</span>
-            <span className="neo-tag bg-neo-yellow text-neo-text"><Crown size={12} /> {PLANS.find((p) => p.id === activePlan)?.name} plan</span>
           </div>
         </div>
       </div>
@@ -124,9 +139,14 @@ export default function Profile() {
             <span className="text-[10px] text-neo-text-muted">Resolved workspace: <code>{workspace?.id || '…'}</code> - changing this updates every request's <code>X-Workspace-Id</code> header.</span>
           </label>
 
-          <button onClick={handleSave} className="neo-btn bg-neo-mint text-neo-text py-2 px-4 flex items-center justify-center gap-2 self-start">
-            {saved ? <><Check size={16} /> Saved</> : <><Save size={16} /> Save Changes</>}
-          </button>
+          <div className="flex gap-2">
+            <button onClick={handleSave} className="neo-btn bg-neo-mint text-neo-text py-2 px-4 flex items-center justify-center gap-2 self-start">
+              {saved ? <><Check size={16} /> Saved</> : <><Save size={16} /> Save Changes</>}
+            </button>
+            <button onClick={handleEnablePush} className="neo-btn bg-neo-surface-high text-neo-text py-2 px-4 flex items-center justify-center gap-2 self-start">
+              {pushStatus === 'enabled' ? <><Check size={16} /> Push Enabled</> : <><Bell size={16} /> Enable Push</>}
+            </button>
+          </div>
         </div>
 
         {/* Usage */}
@@ -146,39 +166,6 @@ export default function Profile() {
             </div>
           ))}
         </div>
-      </div>
-
-      {/* Plans */}
-      <div className="neo-surface neo-border-thick neo-shadow p-5 flex flex-col gap-4">
-        <h3 className="neo-title-md flex items-center gap-2"><CreditCard size={18} /> Subscription Plan</h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {PLANS.map((p) => {
-            const isActive = activePlan === p.id;
-            return (
-              <button
-                key={p.id}
-                onClick={() => setActivePlan(p.id)}
-                className={`text-left p-4 neo-border-thick transition-all flex flex-col gap-2 ${
-                  isActive ? 'bg-neo-yellow text-neo-text neo-shadow' : 'bg-neo-surface hover:bg-neo-surface-high'
-                }`}
-              >
-                <div className="flex justify-between items-baseline">
-                  <span className="neo-title-md text-base">{p.name}</span>
-                  <span className="neo-label-sm">{p.price}</span>
-                </div>
-                <ul className="flex flex-col gap-1">
-                  {p.features.map((f) => (
-                    <li key={f} className="text-xs flex items-center gap-1.5 text-neo-text-muted">
-                      <Check size={12} className="text-neo-blue shrink-0" /> {f}
-                    </li>
-                  ))}
-                </ul>
-                {isActive && <span className="neo-tag bg-neo-surface text-neo-text mt-1 self-start">Current</span>}
-              </button>
-            );
-          })}
-        </div>
-        <p className="text-xs text-neo-text-muted">Personal use runs entirely on your trusted Mac. Upgrading is a deployment swap, not a rewrite - multi-tenant from day one.</p>
       </div>
 
       {/* AI Guardrails - what AI can and cannot touch */}

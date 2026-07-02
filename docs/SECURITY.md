@@ -102,6 +102,19 @@ worktree, same fail-closed chain as every other gate in this section. See
 `docs/SELF-EXTENSION.md` §4's note, including a real live end-to-end run performed in this
 session (no paid API key or git mutation needed, unlike #72's Agent SDK constraint).
 
+**Implemented (issues #101/#102):** "signature-verified" above is now real -
+`services/lifeos-api/src/marketplace_sign.rs` ed25519-signs a published
+manifest's canonical JSON bytes with a platform key resolved from
+`LIFEOS_MARKETPLACE_SIGNING_SEED` (never an implicit/unconfigured key -
+publish/verify honestly 501 without it); `POST /api/marketplace/install`
+re-verifies the stored signature against the stored manifest before
+recording an install - a single tampered byte in either changes the signed
+bytes and fails closed with 400, never a silent install. This covers the
+marketplace half only; the render validator above stays local to the Node
+scaffold layer (a headless-Chromium boot doesn't belong in an HTTP route),
+and "re-validated locally" for a marketplace-sourced module still means the
+same Validator 1 + Validator 2 chain this section describes.
+
 ---
 
 ## 4. Browser actuator containment
@@ -131,6 +144,23 @@ session (no paid API key or git mutation needed, unlike #72's Agent SDK constrai
   `POST /api/account/set-password` (bootstrap for the personal account
   seeded before #100) only ever succeeds while `password_hash IS NULL`,
   so it can never overwrite an already-secured account's password.
+- **Per-workspace envelope key + database-per-workspace (issue #104):**
+  `workspaces.envelope_key_enc` is a random AES-256-GCM key generated on
+  first use, itself envelope-encrypted under the server's master
+  `LIFEOS_SECRET_ENCRYPTION_KEY` (`crypto::random_key`, migration
+  `0011_workspace_envelope_key.sql`). `POST /api/workspace/provision-db`
+  creates a dedicated Turso database via the Turso platform API
+  (`TURSO_PLATFORM_API_TOKEN`/`TURSO_ORG_SLUG` - honestly 501 without
+  them) and stores its auth token encrypted under that workspace's own
+  envelope key, never the shared master key alone and never returned in
+  any response (`workspace_databases`, migration
+  `0012_workspace_databases.sql`). **No billing/quota gating exists
+  anywhere in this path** - this is a self-hosted, bring-your-own-database-
+  and-AI-model project; the `plans`/`subscriptions` catalog stub from
+  §5's original control-plane migration was dropped entirely (migration
+  `0013_remove_billing.sql`, `DROP TABLE IF EXISTS`) rather than built
+  out, since nothing ever read it. `workspaces.plan` stays as a free-text
+  label only, never checked by any route.
 
 ---
 
