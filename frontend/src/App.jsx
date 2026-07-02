@@ -1,21 +1,27 @@
-import React, { useState } from 'react';
+import React, { useState, Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import LoginPage from './pages/LoginPage';
-import Dashboard from './pages/Dashboard';
-import Database from './pages/Database';
-import Modules from './pages/Modules';
-import Knowledge from './pages/Knowledge';
-import Harness from './pages/Harness';
-import Storage from './pages/Storage';
-import Integrations from './pages/Integrations';
-import DocsHub from './pages/DocsHub';
-import Profile from './pages/Profile';
-import RefineDemo from './pages/RefineDemo';
-import GraphView from './pages/GraphView';
-import InstalledModulePage from './pages/InstalledModulePage';
-import ModuleDashboards from './pages/ModuleDashboards';
-import AgentLedger from './pages/AgentLedger';
+import { apiCall, WORKSPACE_ID_KEY, KEY_TOKEN_KEY, REFRESH_TOKEN_KEY } from './lib/api';
+
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const Database = lazy(() => import('./pages/Database'));
+const Modules = lazy(() => import('./pages/Modules'));
+const Knowledge = lazy(() => import('./pages/Knowledge'));
+const Harness = lazy(() => import('./pages/Harness'));
+const Storage = lazy(() => import('./pages/Storage'));
+const Integrations = lazy(() => import('./pages/Integrations'));
+const DocsHub = lazy(() => import('./pages/DocsHub'));
+const Profile = lazy(() => import('./pages/Profile'));
+const RefineDemo = lazy(() => import('./pages/RefineDemo'));
+const GraphView = lazy(() => import('./pages/GraphView'));
+const InstalledModulePage = lazy(() => import('./pages/InstalledModulePage'));
+const ModuleDashboards = lazy(() => import('./pages/ModuleDashboards'));
+const AgentLedger = lazy(() => import('./pages/AgentLedger'));
+
+const PageFallback = () => (
+  <div style={{ padding: '2rem', textAlign: 'center', color: '#888' }}>Loading...</div>
+);
 
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(
@@ -23,7 +29,17 @@ export default function App() {
   );
 
   const handleLogout = () => {
+    // Real session revocation (issue #100): best-effort - if the API is
+    // unreachable the local session is cleared anyway, matching the
+    // frontend's general fail-open-to-offline posture.
+    const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
+    if (refreshToken) {
+      apiCall('POST', '/api/logout', { refresh_token: refreshToken });
+    }
     localStorage.removeItem('life_os_loggedin');
+    localStorage.removeItem(WORKSPACE_ID_KEY);
+    localStorage.removeItem(KEY_TOKEN_KEY);
+    localStorage.removeItem(REFRESH_TOKEN_KEY);
     setIsLoggedIn(false);
   };
 
@@ -33,6 +49,7 @@ export default function App() {
 
   return (
     <BrowserRouter>
+      <Suspense fallback={<PageFallback />}>
       <Routes>
         <Route
           path="/dashboard"
@@ -155,6 +172,7 @@ export default function App() {
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
+      </Suspense>
     </BrowserRouter>
   );
 }

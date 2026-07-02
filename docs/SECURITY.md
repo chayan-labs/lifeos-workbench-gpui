@@ -118,6 +118,19 @@ session (no paid API key or git mutation needed, unlike #72's Agent SDK constrai
 - Every query is `workspace_id`-scoped at the API layer (RLS-style); a second workspace cannot see the first's rows.
 - SaaS path: Turso database-per-workspace; per-workspace envelope key for non-Nango secrets.
 - Derived state (`lifeos-derived.db`) and blobs (CAS) are local/keyed and never leak cross-workspace.
+- **Real login/session (issue #100):** passwords are argon2id-hashed
+  (`users.password_hash`, never plaintext); a `sessions` table backs
+  refresh-token rotation - `POST /api/session/refresh` revokes the
+  presented token and issues a fresh session, so a leaked refresh token
+  has a bounded window even if never explicitly revoked, and a reused
+  (already-rotated-away) token is rejected. Refresh tokens are stored
+  only as a SHA-256 hash, never plaintext, mirroring password hashing's
+  "the DB never holds a usable credential" principle. `POST /api/login`
+  and `POST /api/register` return generic "invalid email or password"
+  errors on failure - never revealing whether the email exists.
+  `POST /api/account/set-password` (bootstrap for the personal account
+  seeded before #100) only ever succeeds while `password_hash IS NULL`,
+  so it can never overwrite an already-secured account's password.
 
 ---
 

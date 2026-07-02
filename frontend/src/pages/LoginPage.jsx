@@ -1,16 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { ShieldAlert, KeyRound, User, Briefcase, Sparkles, CheckCircle, Moon, Sun } from 'lucide-react';
 import BrandMark from '../components/BrandMark';
-import { apiCall, WORKSPACE_ID_KEY, KEY_TOKEN_KEY } from '../lib/api';
+import { apiCall, WORKSPACE_ID_KEY, KEY_TOKEN_KEY, REFRESH_TOKEN_KEY } from '../lib/api';
 
 export default function LoginPage({ onLogin }) {
   const [isLogin, setIsLogin] = useState(true);
-  const [email, setEmail] = useState('chayan@lifeos.app');
-  const [password, setPassword] = useState('password');
-  
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+
   // Registration States
   const [regName, setRegName] = useState('');
   const [regEmail, setRegEmail] = useState('');
+  const [regPassword, setRegPassword] = useState('');
   const [regWorkspace, setRegWorkspace] = useState('');
   const [regSuccessData, setRegSuccessData] = useState(null);
 
@@ -39,43 +40,27 @@ export default function LoginPage({ onLogin }) {
 
   const handleLoginSubmit = (e) => {
     e.preventDefault();
-    
-    // Demo identity only. NOTE: matching must be an exact credential check -
-    // a substring match (e.g. email.includes('chayan')) would shadow any real
-    // registered user whose email contains the substring, trapping them in the
-    // default workspace and ignoring their key. Registered users fall through
-    // to the localStorage lookup below.
-    if (email === 'chayan@lifeos.app' && password === 'password') {
+    setError('');
+
+    // Real login (issue #100): the backend verifies the password against
+    // users.password_hash and mints a real access + refresh token pair.
+    // No client-side credential storage/matching exists anymore.
+    apiCall('POST', '/api/login', { email, password }).then(({ ok, data, error, offline }) => {
+      if (offline) {
+        setError('Cannot reach the Life OS API. Check that lifeos-api is running.');
+        return;
+      }
+      if (!ok || !data || !data.key_token) {
+        setError(error || 'Invalid email or password.');
+        return;
+      }
       localStorage.setItem('life_os_loggedin', 'true');
       localStorage.setItem('life_os_user_email', email);
-      localStorage.setItem('life_os_user_name', 'Chayan Aggarwal');
-      localStorage.setItem(WORKSPACE_ID_KEY, 'default-personal-workspace');
-      localStorage.setItem('life_os_workspace_name', 'Personal Workspace');
-      // Demo identity has no backend-minted key_token (soft-auth: there is no
-      // /api/login - only /api/register mints one). Requests fall back to
-      // X-Workspace-Id-only identification, same as the backend's default.
-      localStorage.removeItem(KEY_TOKEN_KEY);
+      localStorage.setItem(WORKSPACE_ID_KEY, data.workspace_id);
+      localStorage.setItem(KEY_TOKEN_KEY, data.key_token);
+      localStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token);
       onLogin();
-      return;
-    }
-
-    // Check custom registered users from localStorage
-    const savedUsers = JSON.parse(localStorage.getItem('life_os_registered_users') || '[]');
-    const match = savedUsers.find(u => u.email === email && u.key === password);
-
-    if (match) {
-      localStorage.setItem('life_os_loggedin', 'true');
-      localStorage.setItem('life_os_user_email', email);
-      localStorage.setItem('life_os_user_name', match.name);
-      localStorage.setItem(WORKSPACE_ID_KEY, match.workspace_id);
-      localStorage.setItem('life_os_workspace_name', match.workspace_name);
-      // match.key is the key_token minted by /api/register - this IS the
-      // bearer "password" the soft-auth model uses, so persist it canonically.
-      localStorage.setItem(KEY_TOKEN_KEY, match.key);
-      onLogin();
-    } else {
-      setError('Invalid email or key. Use chayan@lifeos.app / password, or register a new workspace.');
-    }
+    });
   };
 
   const handleRegisterSubmit = (e) => {
@@ -85,69 +70,40 @@ export default function LoginPage({ onLogin }) {
     const payload = {
       email: regEmail,
       name: regName,
-      workspace_name: regWorkspace
+      password: regPassword,
+      workspace_name: regWorkspace,
     };
 
-    // Attempt registration against the local Axum Rust API. Soft-auth model:
-    // there is no /api/login - /api/register is the only place a key_token is
-    // minted, and it doubles as the password the demo login form accepts.
+    // Real registration (issue #100): the backend hashes and stores the
+    // password, and mints an access + refresh token pair. A duplicate
+    // email is now a real rejection (log in instead), not a silent
+    // re-issue - surface that error rather than hiding it.
     apiCall('POST', '/api/register', payload).then(({ ok, data, error, offline }) => {
-      // Real backend success: the server minted the tenant + key_token.
-      if (ok && !offline && data && data.workspace_id && data.key_token) {
-        saveUserLocally({
-          email: regEmail,
-          name: regName,
-          workspace_name: regWorkspace,
-          workspace_id: data.workspace_id,
-          key: data.key_token,
-        });
+      if (offline) {
+        setError('Cannot reach the Life OS API. Check that lifeos-api is running.');
         return;
       }
-
-      // A reachable backend that rejected the request (duplicate email,
-      // validation error, etc.) is NOT offline. Surface the real error instead
-      // of faking success and persisting a phantom tenant the server never minted.
-      if (!offline) {
+      if (!ok || !data || !data.workspace_id || !data.key_token) {
         setError(error || 'Registration failed. Please check your details and try again.');
         return;
       }
 
-      // Only fall back to a local mock workspace when the Rust server is truly
-      // unreachable, so the offline flow still works for local development.
-      const mockWorkspaceId = 'ws_' + Math.random().toString(36).substring(2, 10);
-      const mockKey = 'key_' + Math.random().toString(36).substring(2, 12);
-      saveUserLocally({
+      localStorage.setItem(WORKSPACE_ID_KEY, data.workspace_id);
+      localStorage.setItem(KEY_TOKEN_KEY, data.key_token);
+      localStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token);
+      setRegSuccessData({
         email: regEmail,
         name: regName,
         workspace_name: regWorkspace,
-        workspace_id: mockWorkspaceId,
-        key: mockKey,
+        workspace_id: data.workspace_id,
       });
     });
   };
 
-  const saveUserLocally = (newUser) => {
-    const savedUsers = JSON.parse(localStorage.getItem('life_os_registered_users') || '[]');
-    savedUsers.push(newUser);
-    localStorage.setItem('life_os_registered_users', JSON.stringify(savedUsers));
-
-    // Persist under the canonical keys apiCall reads, so the freshly
-    // registered tenant is immediately active (not just the demo workspace).
-    localStorage.setItem(WORKSPACE_ID_KEY, newUser.workspace_id);
-    localStorage.setItem(KEY_TOKEN_KEY, newUser.key);
-
-    // Show success view with generated keys
-    setRegSuccessData(newUser);
-  };
-
+  // Registration already minted and stored a valid session (key_token +
+  // refresh_token) - no second login round-trip needed, just enter.
   const proceedToLogin = () => {
-    setEmail(regSuccessData.email);
-    setPassword(regSuccessData.key);
-    setIsLogin(true);
-    setRegSuccessData(null);
-    setRegName('');
-    setRegEmail('');
-    setRegWorkspace('');
+    onLogin();
   };
 
   return (
@@ -200,7 +156,7 @@ export default function LoginPage({ onLogin }) {
             </div>
 
             <p className="text-xs font-semibold leading-relaxed text-neo-text-muted">
-              Your tenant domain is compiled. Store this private key carefully. You will use it as your identity access password.
+              Your tenant workspace is live. Remember the password you set - it's hashed server-side and never stored anywhere in plaintext, including here.
             </p>
 
             <div className="p-4 bg-neo-bg neo-border font-mono text-xs flex flex-col gap-2">
@@ -212,17 +168,13 @@ export default function LoginPage({ onLogin }) {
                 <span className="text-neo-text-muted font-bold block">TENANT ID:</span>
                 <span className="font-mono text-neo-blue font-bold">{regSuccessData.workspace_id}</span>
               </div>
-              <div className="mt-2">
-                <span className="text-neo-text-muted font-bold block">PRIVATE KEY (PASSWORD):</span>
-                <span className="font-mono text-neo-blue font-bold break-all select-all">{regSuccessData.key}</span>
-              </div>
             </div>
 
             <button
               onClick={proceedToLogin}
               className="neo-btn w-full py-3 neo-border neo-shadow bg-neo-mint text-black font-bold uppercase transition-all"
             >
-              Prefill & Login Now →
+              Enter Workspace →
             </button>
           </div>
         ) : isLogin ? (
@@ -253,7 +205,7 @@ export default function LoginPage({ onLogin }) {
             <div className="flex flex-col gap-2">
               <label className="neo-label-md flex items-center gap-1.5" htmlFor="password">
                 <KeyRound size={16} />
-                <span>Identity Key / Password</span>
+                <span>Password</span>
               </label>
               <input
                 id="password"
@@ -303,6 +255,23 @@ export default function LoginPage({ onLogin }) {
                 onChange={(e) => setRegEmail(e.target.value)}
                 placeholder="e.g. chayan@example.com"
                 className="p-2.5 neo-border bg-neo-surface text-xs font-mono focus:outline-none"
+                required
+              />
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label className="neo-label-md flex items-center gap-1.5" htmlFor="regPassword">
+                <KeyRound size={14} />
+                <span>Password</span>
+              </label>
+              <input
+                id="regPassword"
+                type="password"
+                value={regPassword}
+                onChange={(e) => setRegPassword(e.target.value)}
+                placeholder="At least 8 characters"
+                minLength={8}
+                className="p-2.5 neo-border bg-neo-surface text-xs font-semibold focus:outline-none"
                 required
               />
             </div>

@@ -49,6 +49,26 @@ Revised from the original §10 to reflect the tools we adopt (which compress sev
 - Real auth/sessions; **PWA** (service worker + Web Push); **module marketplace** (publish/sign/install); database-per-workspace swap; plan/quota gating; billing.
 - → *flip from personal to multi-tenant product.*
 
+**Implemented (issue #100):** `users.password_hash` (argon2id) + a new
+`sessions` table back real credential login. `POST /api/register` now
+hashes and stores a real password and rejects a duplicate email (400,
+"log in instead") rather than the old soft "re-issue a token for
+whoever owns this email, no password required" behavior - closing the
+actual security gap (anyone who knew a registered email could mint
+themselves a valid token). `POST /api/login` verifies the password;
+`POST /api/session/refresh` rotates the refresh token (old one revoked,
+new session issued - a reused/rotated-away token is rejected);
+`POST /api/logout` revokes one session. `POST /api/account/set-password`
+is a narrow one-time bootstrap for the personal account seeded before
+#100 (only works while `password_hash IS NULL`, so it can never be used
+to take over an already-secured account). The access token itself
+(`auth.rs::issue_token`/`resolve_workspace`) is UNCHANGED - the 20+
+routes that already call `resolve_workspace` keep working untouched;
+sessions are a new stateful layer behind the existing stateless JWT, not
+a replacement for it. Frontend `LoginPage.jsx` now calls the real
+`/api/login`/`/api/register` routes instead of a client-side demo
+credential check.
+
 ---
 
 ## Verification (per phase)

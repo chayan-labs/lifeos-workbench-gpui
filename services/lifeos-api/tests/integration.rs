@@ -82,14 +82,15 @@ async fn health_is_healthy_and_touches_db() {
 }
 
 #[tokio::test]
-async fn register_persists_and_is_idempotent() {
+async fn register_persists_and_rejects_duplicate_email() {
     let app = test_app().await;
-    let payload = json!({"email": "x@y.z", "name": "X", "workspace_name": "WS"});
+    let payload = json!({"email": "x@y.z", "name": "X", "password": "test-password-123", "workspace_name": "WS"});
 
     let (status, body) = send(&app.router, "POST", "/api/register", Some(payload.clone())).await;
     assert_eq!(status, StatusCode::OK);
     let ws = body["workspace_id"].as_str().unwrap().to_string();
     assert!(body["key_token"].as_str().unwrap().len() > 10);
+    assert!(body["refresh_token"].as_str().unwrap().len() > 10);
     assert_eq!(body["status"], "registered");
 
     // The workspace must really exist: creating an entity scoped to it succeeds.
@@ -102,11 +103,94 @@ async fn register_persists_and_is_idempotent() {
     .await;
     assert_eq!(st, StatusCode::OK);
 
-    // Re-registering the same email is idempotent (same workspace, no 500).
-    let (status2, body2) = send(&app.router, "POST", "/api/register", Some(payload)).await;
-    assert_eq!(status2, StatusCode::OK);
-    assert_eq!(body2["status"], "existing");
-    assert_eq!(body2["workspace_id"].as_str().unwrap(), ws);
+    // Re-registering the same email is a real conflict now (issue #100) -
+    // no longer a soft "re-issue a token for whoever owns this email".
+    let (status2, _) = send(&app.router, "POST", "/api/register", Some(payload)).await;
+    assert_eq!(status2, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn login_verifies_password_and_refresh_rotates_the_session() {
+    let app = test_app().await;
+    let payload = json!({"email": "login@y.z", "name": "L", "password": "correct-horse-battery", "workspace_name": "WS"});
+    let (_, reg) = send(&app.router, "POST", "/api/register", Some(payload)).await;
+    let workspace_id = reg["workspace_id"].as_str().unwrap().to_string();
+
+    // Wrong password rejected.
+    let (st, _) = send(
+        &app.router,
+        "POST",
+        "/api/login",
+        Some(json!({"email": "login@y.z", "password": "wrong"})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+
+    // Correct password logs in.
+    let (st, body) = send(
+        &app.router,
+        "POST",
+        "/api/login",
+        Some(json!({"email": "login@y.z", "password": "correct-horse-battery"})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(body["workspace_id"], workspace_id);
+    let refresh1 = body["refresh_token"].as_str().unwrap().to_string();
+
+    // Refresh rotates: old token can never be reused, new one is different and works.
+    let (st, refreshed) = send(
+        &app.router,
+        "POST",
+        "/api/session/refresh",
+        Some(json!({"refresh_token": refresh1})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let refresh2 = refreshed["refresh_token"].as_str().unwrap().to_string();
+    assert_ne!(refresh1, refresh2);
+
+    let (st, _) = send(
+        &app.router,
+        "POST",
+        "/api/session/refresh",
+        Some(json!({"refresh_token": refresh1})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "a rotated-away refresh token must not be reusable");
+
+    let (st, _) = send(
+        &app.router,
+        "POST",
+        "/api/session/refresh",
+        Some(json!({"refresh_token": refresh2})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn logout_revokes_the_session_and_set_password_only_works_once() {
+    let app = test_app().await;
+    let payload = json!({"email": "logout@y.z", "name": "L", "password": "some-password-here", "workspace_name": "WS"});
+    let (_, reg) = send(&app.router, "POST", "/api/register", Some(payload)).await;
+    let refresh = reg["refresh_token"].as_str().unwrap().to_string();
+
+    let (st, _) = send(&app.router, "POST", "/api/logout", Some(json!({"refresh_token": refresh.clone()}))).await;
+    assert_eq!(st, StatusCode::OK);
+
+    let (st, _) = send(&app.router, "POST", "/api/session/refresh", Some(json!({"refresh_token": refresh}))).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "a revoked session must not be refreshable");
+
+    // set-password only ever works for a passwordless account.
+    let (st, _) = send(
+        &app.router,
+        "POST",
+        "/api/account/set-password",
+        Some(json!({"email": "logout@y.z", "password": "another-password"})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "an account with a password already set must reject set-password");
 }
 
 #[tokio::test]

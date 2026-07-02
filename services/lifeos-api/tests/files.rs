@@ -79,7 +79,7 @@ async fn register(app: &Router, name: &str) -> String {
         app,
         "POST",
         "/api/register",
-        Some(json!({"email": format!("{name}@test.example"), "name": name, "workspace_name": name})),
+        Some(json!({"email": format!("{name}@test.example"), "name": name, "password": "test-password-123", "workspace_name": name})),
     )
     .await;
     assert_eq!(st, StatusCode::OK, "register {name}: {body:?}");

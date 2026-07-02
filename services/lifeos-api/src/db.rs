@@ -24,6 +24,12 @@ const MIGRATION_VCS_REFS: &str = include_str!("../../../migrations/0005_vcs_refs
 /// `configs` (release-loop candidate configs, issue #98) - a new `CREATE
 /// TABLE IF NOT EXISTS`, naturally idempotent like core/control/vcs_refs.
 const MIGRATION_RELEASE_CONFIGS: &str = include_str!("../../../migrations/0006_release_configs.sql");
+/// `users.password_hash` (real login, issue #100) - `ALTER TABLE ADD COLUMN`,
+/// guarded by `add_column_if_missing` like `MIGRATION_MODULE_REQUESTS_CHAT_ID`.
+const MIGRATION_AUTH_PASSWORD: &str = include_str!("../../../migrations/0007_auth_password.sql");
+/// `sessions` (refresh-token rotation, issue #100) - a new `CREATE TABLE IF
+/// NOT EXISTS`, naturally idempotent.
+const MIGRATION_AUTH_SESSIONS: &str = include_str!("../../../migrations/0008_auth_sessions.sql");
 
 /// The canonical DB plus its live connection. `database` is retained by the caller
 /// so the embedded-replica's background replicator stays alive (dropping it would
@@ -149,6 +155,8 @@ pub async fn run_migrations(conn: &Connection) -> Result<(), libsql::Error> {
     add_column_if_missing(conn, "module_requests", "chat_id", MIGRATION_MODULE_REQUESTS_CHAT_ID).await?;
     conn.execute_batch(MIGRATION_VCS_REFS).await?;
     conn.execute_batch(MIGRATION_RELEASE_CONFIGS).await?;
+    add_column_if_missing(conn, "users", "password_hash", MIGRATION_AUTH_PASSWORD).await?;
+    conn.execute_batch(MIGRATION_AUTH_SESSIONS).await?;
     tracing::info!("migrations applied (core + control plane)");
     Ok(())
 }

@@ -1,13 +1,17 @@
-//! `POST /api/register` - create a tenant. Persists a workspace, a user, and the
-//! membership joining them, then returns `{ workspace_id, key_token }` (the
-//! frontend reads exactly those two fields).
+//! `POST /api/register` - create a tenant. Persists a workspace, a user (with
+//! a real argon2-hashed password, issue #100), and the membership joining
+//! them, then returns `{ workspace_id, key_token, refresh_token }`.
 //!
-//! Idempotent on email: re-registering an existing email re-issues a token for
-//! that user's workspace instead of failing on the UNIQUE(email) constraint.
+//! An existing email is now a real 409 Conflict (log in instead via
+//! `POST /api/login`) rather than the old soft "re-issue a token for
+//! whoever owns this email, no password required" behavior - that was the
+//! actual security gap issue #100 closes: anyone who knew (or guessed) a
+//! registered email could mint themselves a valid token for that tenant.
 
-use crate::auth::issue_token;
+use crate::auth::{hash_password, issue_token};
 use crate::error::{ApiError, ApiResult};
 use crate::ids::{new_id, now_secs};
+use crate::routes::login::create_session;
 use crate::state::AppState;
 use axum::{extract::State, Json};
 use serde::Deserialize;
@@ -17,6 +21,7 @@ use serde_json::{json, Value};
 pub struct RegisterRequest {
     email: String,
     name: String,
+    password: String,
     workspace_name: String,
 }
 
@@ -30,17 +35,18 @@ pub async fn register(
             "email, name and workspace_name are required".into(),
         ));
     }
-
-    // Already registered? Re-issue a token for their existing workspace.
-    if let Some((user_id, workspace_id)) = lookup_existing(&state, email).await? {
-        let key_token = issue_token(&state.config.jwt_secret, &user_id, &workspace_id, email);
-        return Ok(Json(json!({
-            "user_id": user_id,
-            "workspace_id": workspace_id,
-            "key_token": key_token,
-            "status": "existing",
-        })));
+    if req.password.len() < 8 {
+        return Err(ApiError::BadRequest("password must be at least 8 characters".into()));
     }
+
+    if email_exists(&state, email).await? {
+        return Err(ApiError::BadRequest(format!(
+            "an account for '{email}' already exists - log in via POST /api/login instead"
+        )));
+    }
+
+    let password_hash =
+        hash_password(&req.password).map_err(|e| ApiError::Internal(format!("password hashing failed: {e}")))?;
 
     let now = now_secs();
     let user_id = new_id("usr");
@@ -58,8 +64,9 @@ pub async fn register(
     state
         .conn
         .execute(
-            "INSERT INTO users (id, email, name, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            libsql::params![user_id.clone(), email, req.name, now, now],
+            "INSERT INTO users (id, email, name, password_hash, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            libsql::params![user_id.clone(), email, req.name, password_hash, now, now],
         )
         .await?;
     state
@@ -72,29 +79,22 @@ pub async fn register(
         .await?;
 
     let key_token = issue_token(&state.config.jwt_secret, &user_id, &workspace_id, email);
+    let refresh_token = create_session(&state, &user_id, &workspace_id).await?;
     tracing::info!(%user_id, %workspace_id, "registered new tenant");
 
     Ok(Json(json!({
         "user_id": user_id,
         "workspace_id": workspace_id,
         "key_token": key_token,
+        "refresh_token": refresh_token,
         "status": "registered",
     })))
 }
 
-/// Returns `(user_id, workspace_id)` for an existing email, if any.
-async fn lookup_existing(state: &AppState, email: &str) -> ApiResult<Option<(String, String)>> {
+async fn email_exists(state: &AppState, email: &str) -> ApiResult<bool> {
     let mut rows = state
         .conn
-        .query(
-            "SELECT u.id, m.workspace_id FROM users u \
-             JOIN memberships m ON m.user_id = u.id \
-             WHERE u.email = ?1 ORDER BY m.created_at ASC LIMIT 1",
-            libsql::params![email],
-        )
+        .query("SELECT 1 FROM users WHERE email = ?1", libsql::params![email])
         .await?;
-    match rows.next().await? {
-        Some(row) => Ok(Some((row.get(0)?, row.get(1)?))),
-        None => Ok(None),
-    }
+    Ok(rows.next().await?.is_some())
 }

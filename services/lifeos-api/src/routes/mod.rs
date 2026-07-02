@@ -13,6 +13,7 @@ mod health;
 mod job;
 mod kite;
 mod llm;
+mod login;
 mod metrics;
 mod module_request;
 mod notion;
@@ -40,6 +41,11 @@ pub fn router(state: AppState) -> Router {
         // --- liveness + identity ---
         .route("/api/health", get(health::health))
         .route("/api/register", post(register::register))
+        // --- real login/session (issue #100, docs/SECURITY.md §5) ---
+        .route("/api/login", post(login::login))
+        .route("/api/session/refresh", post(login::refresh))
+        .route("/api/logout", post(login::logout))
+        .route("/api/account/set-password", post(login::set_password))
         .route("/api/me", get(workspace::me))
         .route("/api/workspace", get(workspace::get_workspace).patch(workspace::update_workspace))
         // --- generic entity CRUD (the spine the whole system rests on) ---

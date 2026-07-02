@@ -13,6 +13,11 @@ export const NANGO_CONNECT_UI_URL =
 // Canonical localStorage keys for tenant + soft-auth state. See FRONTEND.md §1.
 export const WORKSPACE_ID_KEY = 'life_os_workspace_id';
 export const KEY_TOKEN_KEY = 'life_os_key_token';
+// Refresh token backing session rotation (issue #100, docs/SECURITY.md §5).
+// Only ever sent to /api/session/refresh and /api/logout - never attached
+// to authHeaders(), so it can't leak onto ordinary API calls the way a
+// key_token deliberately does.
+export const REFRESH_TOKEN_KEY = 'life_os_refresh_token';
 const DEFAULT_WORKSPACE_ID = 'default-personal-workspace';
 
 // status: 'live'    -> implemented in lifeos-api (services/lifeos-api/src/)
@@ -120,8 +125,8 @@ export const API_ROUTES = [
     method: 'POST',
     path: '/api/register',
     status: 'live',
-    summary: 'Register a new workspace (tenant) + user and mint a key_token.',
-    sample: { email: 'me@example.com', name: 'Me', workspace_name: 'My Life OS' },
+    summary: 'Register a new workspace (tenant) + user (real hashed password, issue #100) and mint a key_token + refresh_token.',
+    sample: { email: 'me@example.com', name: 'Me', password: 'a-real-password', workspace_name: 'My Life OS' },
   },
   {
     service: 'lifeos-api',
@@ -284,12 +289,36 @@ export const API_ROUTES = [
     sample: null,
   },
   {
-    service: 'broker-guard',
+    service: 'lifeos-api',
     method: 'GET',
     path: '/api/broker/positions',
     status: 'planned',
     summary: 'Read-only broker positions (501 until the trading phase). Order routes never exist.',
     sample: null,
+  },
+  {
+    service: 'lifeos-api',
+    method: 'POST',
+    path: '/api/login',
+    status: 'live',
+    summary: 'Real login (issue #100): verifies a password and issues an access token + rotating refresh token.',
+    sample: { email: 'you@example.com', password: 'your-password' },
+  },
+  {
+    service: 'lifeos-api',
+    method: 'POST',
+    path: '/api/session/refresh',
+    status: 'live',
+    summary: 'Rotates a refresh token: revokes it and issues a fresh access token + refresh token.',
+    sample: { refresh_token: '<refresh_token>' },
+  },
+  {
+    service: 'lifeos-api',
+    method: 'POST',
+    path: '/api/logout',
+    status: 'live',
+    summary: 'Revokes one session.',
+    sample: { refresh_token: '<refresh_token>' },
   },
 ];
 
