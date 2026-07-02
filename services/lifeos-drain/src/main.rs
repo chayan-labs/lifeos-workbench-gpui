@@ -77,6 +77,7 @@ fn env_float(key: &str, default: f64) -> f64 {
 async fn main() {
     let db_path = std::env::var("LIFEOS_DB_PATH").unwrap_or_else(|_| "lifeos.db".to_string());
     let poll = Duration::from_secs(env_int("LIFEOS_DRAIN_POLL_SECS", 3).max(1) as u64);
+    let memory_sleep_threshold = env_int("LIFEOS_MEMORY_SLEEP_THRESHOLD", 25).max(1);
     let cfg = DrainConfig {
         stuck_ttl_secs: env_int("LIFEOS_DRAIN_STUCK_TTL_SECS", 300),
         max_attempts: env_int("LIFEOS_DRAIN_MAX_ATTEMPTS", 3),
@@ -210,6 +211,13 @@ async fn main() {
             Ok(_) => {}
             Err(e) => eprintln!("lifeos-drain: actions engine tick failed: {e}"),
         }
+        // Memory consolidation trigger (issue #115): idle tick + backlog
+        // threshold (LIFEOS_MEMORY_SLEEP_THRESHOLD, default 25 events).
+        match lifeos_drain::maybe_enqueue_memory_sleep(&conn, memory_sleep_threshold, now_secs()).await {
+            Ok(n) if n > 0 => println!("lifeos-drain: enqueued {n} memory_sleep job(s)"),
+            Ok(_) => {}
+            Err(e) => eprintln!("lifeos-drain: memory sleep trigger failed: {e}"),
+        }
         sleep(poll).await;
     }
 }
@@ -290,6 +298,33 @@ async fn run_job(
                 }
                 Err(e) => {
                     eprintln!("lifeos-drain: {} pipeline failed: {e} - failing", job.id);
+                    fail_job(conn, &job.id, worker_id).await
+                }
+            }
+        }
+        Dispatch::MemorySleep => {
+            // One consolidation cycle (issue #115). The deterministic
+            // heuristic model goes through the BLAKE3 replay cache, so a
+            // later rebuild replays this cycle's summaries verbatim; a
+            // Haiku-backed MemoryModel slots in via the same trait when
+            // consolidation quality is worth the API spend.
+            let now = now_secs();
+            let model = lifeos_memory::ReplayCachedModel::new(&lifeos_memory::HeuristicModel, conn, now);
+            match lifeos_memory::run_sleep_cycle(
+                conn,
+                &job.workspace_id,
+                &model,
+                &lifeos_memory::HeuristicPolicyLearner,
+                now,
+            )
+            .await
+            {
+                Ok(report) => {
+                    println!("lifeos-drain: {} memory_sleep -> {report:?}", job.id);
+                    complete_job(conn, &job.id, worker_id).await
+                }
+                Err(e) => {
+                    eprintln!("lifeos-drain: {} memory_sleep failed: {e} - failing", job.id);
                     fail_job(conn, &job.id, worker_id).await
                 }
             }

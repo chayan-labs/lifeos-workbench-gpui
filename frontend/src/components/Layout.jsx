@@ -8,6 +8,7 @@ import { apiCall } from '../lib/api';
 import { hydrateFromStorage } from '../lib/moduleRegistry';
 import { useModuleStream } from '../lib/useModuleStream';
 import {
+  Brain,
   LayoutDashboard,
   Database,
   Cpu,
@@ -147,6 +148,7 @@ export default function Layout({ children, onLogout }) {
         { name: 'Integrations', href: '/integrations', icon: Settings },
         { name: 'Docs', href: '/docs', icon: FileText },
         { name: 'Agent Ledger', href: '/agent-ledger', icon: History },
+        { name: 'Memory', href: '/memory', icon: Brain },
       ],
     },
     // Hot-installed modules (issue #29): appear here the instant the SSE

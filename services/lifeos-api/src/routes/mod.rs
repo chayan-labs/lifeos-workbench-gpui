@@ -15,6 +15,7 @@ mod kite;
 mod llm;
 mod login;
 mod marketplace;
+mod memory;
 mod metrics;
 mod module_request;
 mod notion;
@@ -68,6 +69,17 @@ pub fn router(state: AppState) -> Router {
         .route("/api/job", post(job::create))
         // --- hybrid recall: FTS5 (+ best-effort vectors) over the derived DB ---
         .route("/api/search", get(search::search))
+        // --- cognitive memory (issues #111-#119, docs/AI-MEMORY.md): recall/
+        //     context/consolidation over the event-sourced read models. Every
+        //     recall is itself a ledger event; /inspect renders that ledger. ---
+        .route("/api/memory/recall", post(memory::recall_handler))
+        .route("/api/memory/context", post(memory::context_handler))
+        .route("/api/memory/ingest", post(memory::ingest_handler))
+        .route("/api/memory/sleep", post(memory::sleep_handler))
+        .route("/api/memory/rebuild", post(memory::rebuild_handler))
+        .route("/api/memory/tier", post(memory::tier_handler))
+        .route("/api/memory/rules", get(memory::rules_handler))
+        .route("/api/memory/inspect", get(memory::inspect_handler))
         // --- dashboards: pure SQL aggregation over events ---
         .route("/api/metrics", get(metrics::metrics))
         // --- self-extension intake + lifecycle polling (issue #76) ---

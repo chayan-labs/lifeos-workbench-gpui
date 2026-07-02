@@ -6,6 +6,7 @@ members = [
     "lifeos-ingest",
     "lifeos-pipelines",
     "lifeos-actions",
+    "lifeos-memory",
     "lifeos-drain",
     "lifeos-cli"
 ]

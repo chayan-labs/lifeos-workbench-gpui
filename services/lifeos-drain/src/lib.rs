@@ -170,6 +170,10 @@ pub enum Dispatch {
     /// `lifeos_pipelines::process_pipeline_job`), same direct-library-call
     /// shape as `Ingest`.
     Pipeline,
+    /// `memory_sleep` jobs (issue #115, docs/AI-MEMORY.md §5) run one
+    /// consolidation cycle via `lifeos_memory::run_sleep_cycle`, same
+    /// direct-library-call shape as `Ingest`/`Pipeline`.
+    MemorySleep,
     /// Unknown kind - cannot be handled, will be failed.
     Unknown,
 }
@@ -209,8 +213,49 @@ pub fn dispatch(kind: &str) -> Dispatch {
         // was down when it fired) is acknowledged like reconcile, and the
         // API's has-before-put resume makes re-running it from the API safe.
         "storage_migrate" => Dispatch::Stub("lifeos-api storage migration"),
+        "memory_sleep" => Dispatch::MemorySleep,
         _ => Dispatch::Unknown,
     }
+}
+
+/// Consolidation trigger (issue #115: "triggered on idle + an accumulated-
+/// importance threshold"): on each idle poll tick, enqueue one `memory_sleep`
+/// job per workspace whose unconsolidated-event backlog crossed `threshold` -
+/// unless one is already queued/running (debounce). Returns jobs enqueued.
+pub async fn maybe_enqueue_memory_sleep(
+    conn: &Connection,
+    threshold: i64,
+    now: i64,
+) -> Result<u64, lifeos_memory::MemoryError> {
+    let mut rows = conn.query("SELECT id FROM workspaces ORDER BY id", ()).await?;
+    let mut workspaces = Vec::new();
+    while let Some(row) = rows.next().await? {
+        workspaces.push(row.get::<String>(0)?);
+    }
+    let mut enqueued = 0;
+    for ws in workspaces {
+        if lifeos_memory::unconsolidated_importance(conn, &ws).await? < threshold {
+            continue;
+        }
+        let mut pending = conn
+            .query(
+                "SELECT 1 FROM jobs WHERE workspace_id = ?1 AND kind = 'memory_sleep' \
+                 AND status IN ('queued', 'running') LIMIT 1",
+                params![ws.clone()],
+            )
+            .await?;
+        if pending.next().await?.is_some() {
+            continue; // debounce: a cycle is already scheduled/running
+        }
+        conn.execute(
+            "INSERT INTO jobs (id, workspace_id, kind, payload, status, priority, attempts, created_at) \
+             VALUES (?1, ?2, 'memory_sleep', '{}', 'queued', 0, 0, ?3)",
+            params![format!("job_{}", Ulid::new()), ws, now],
+        )
+        .await?;
+        enqueued += 1;
+    }
+    Ok(enqueued)
 }
 
 // ----------------------------------------------------- module_requests (#76)
@@ -779,6 +824,51 @@ mod tests {
         assert_eq!(dispatch("pipeline"), Dispatch::Pipeline);
         assert_eq!(dispatch("action"), Dispatch::Stub("lifeos-actions run"));
         assert_eq!(dispatch("storage_migrate"), Dispatch::Stub("lifeos-api storage migration"));
+        assert_eq!(dispatch("memory_sleep"), Dispatch::MemorySleep);
         assert_eq!(dispatch("nonsense"), Dispatch::Unknown);
+    }
+
+    #[tokio::test]
+    async fn memory_sleep_enqueues_on_threshold_and_debounces() {
+        let path = "test_memory_sleep_enqueue.db";
+        let conn = fresh_conn(path).await;
+        conn.execute_batch(
+            "CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT, created_at INTEGER, updated_at INTEGER);
+             CREATE TABLE jobs (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, kind TEXT NOT NULL,
+                payload TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'queued',
+                priority INTEGER DEFAULT 0, run_after INTEGER, claimed_by TEXT, claimed_at INTEGER,
+                attempts INTEGER DEFAULT 0, created_at INTEGER NOT NULL);
+             CREATE TABLE memory_cursors (workspace_id TEXT PRIMARY KEY,
+                projected_ts INTEGER NOT NULL DEFAULT 0, projected_id TEXT NOT NULL DEFAULT '',
+                consolidated_ts INTEGER NOT NULL DEFAULT 0, consolidated_id TEXT NOT NULL DEFAULT '',
+                updated_at INTEGER NOT NULL DEFAULT 0);
+             INSERT INTO workspaces VALUES ('ws_default', 'p', 1, 1);",
+        )
+        .await
+        .unwrap();
+
+        // Two events: below the threshold of 3 - nothing enqueued.
+        for i in 0..2 {
+            emit_event(&conn, "ws_default", "note.captured", "", "user", &serde_json::json!({}), 100 + i)
+                .await
+                .unwrap();
+        }
+        assert_eq!(maybe_enqueue_memory_sleep(&conn, 3, 1000).await.unwrap(), 0);
+
+        // Third event crosses the threshold - one job, then debounced.
+        emit_event(&conn, "ws_default", "note.captured", "", "user", &serde_json::json!({}), 102)
+            .await
+            .unwrap();
+        assert_eq!(maybe_enqueue_memory_sleep(&conn, 3, 1000).await.unwrap(), 1);
+        assert_eq!(maybe_enqueue_memory_sleep(&conn, 3, 1001).await.unwrap(), 0, "debounced");
+
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM jobs WHERE kind = 'memory_sleep' AND status = 'queued'", ())
+            .await
+            .unwrap();
+        let n: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(n, 1);
+
+        let _ = std::fs::remove_file(path);
     }
 }

@@ -995,6 +995,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
+name = "fixedbitset"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ce7134b9999ecaf8bcd65542e436736ef32ddca1b3e06094cb6ec5755203b80"
+
+[[package]]
 name = "flate2"
 version = "1.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1968,6 +1974,7 @@ dependencies = [
  "hmac",
  "jsonwebtoken",
  "libsql",
+ "lifeos-memory",
  "lifeos-pipelines",
  "lifeos-vcs",
  "object_store",
@@ -2005,6 +2012,7 @@ dependencies = [
  "libsql",
  "lifeos-actions",
  "lifeos-ingest",
+ "lifeos-memory",
  "lifeos-pipelines",
  "lifeos-vcs",
  "reqwest",
@@ -2034,6 +2042,22 @@ dependencies = [
  "ulid",
  "whisper-rs",
  "zip",
+]
+
+[[package]]
+name = "lifeos-memory"
+version = "1.0.0"
+dependencies = [
+ "async-trait",
+ "blake3",
+ "libsql",
+ "lifeos-vcs",
+ "petgraph",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "ulid",
 ]
 
 [[package]]
@@ -2488,6 +2512,16 @@ name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
+
+[[package]]
+name = "petgraph"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4c5cc86750666a3ed20bdaf5ca2a0344f9c67674cae0515bec2da16fbaa47db"
+dependencies = [
+ "fixedbitset",
+ "indexmap 2.14.0",
+]
 
 [[package]]
 name = "phf"

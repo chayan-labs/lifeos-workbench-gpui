@@ -52,6 +52,20 @@ const MIGRATION_REMOVE_BILLING: &str = include_str!("../../../migrations/0013_re
 /// `CREATE TABLE IF NOT EXISTS`, naturally idempotent.
 const MIGRATION_BLOB_BACKENDS: &str = include_str!("../../../migrations/0014_blob_backends.sql");
 
+/// `events.caused_by_event_id` (memory causal pointer, issue #111) - `ALTER
+/// TABLE ADD COLUMN`, guarded by `add_column_if_missing`.
+const MIGRATION_EVENTS_CAUSED_BY: &str = include_str!("../../../migrations/0015_events_caused_by.sql");
+/// `events.schema_version` (versioned replay, issue #111) - `ALTER TABLE ADD
+/// COLUMN`, guarded by `add_column_if_missing`.
+const MIGRATION_EVENTS_SCHEMA_VERSION: &str =
+    include_str!("../../../migrations/0016_events_schema_version.sql");
+/// Memory read models (issues #111-#118) - new `CREATE TABLE IF NOT EXISTS`
+/// tables, naturally idempotent. All rebuildable from `events`.
+const MIGRATION_MEMORY: &str = include_str!("../../../migrations/0017_memory.sql");
+/// FTS5 over memory_nodes - applied to the DERIVED file (never synced),
+/// alongside 0003, in `bootstrap_derived`.
+const MIGRATION_DERIVED_MEMORY: &str = include_str!("../../../migrations/0018_derived_memory.sql");
+
 /// The canonical DB plus its live connection. `database` is retained by the caller
 /// so the embedded-replica's background replicator stays alive (dropping it would
 /// stop syncing) and so an explicit `database.sync()` can be triggered.
@@ -135,6 +149,7 @@ pub async fn bootstrap_derived(derived_path: &str) -> Result<(), libsql::Error> 
     let db = Builder::new_local(derived_path).build().await?;
     let conn = db.connect()?;
     conn.execute_batch(MIGRATION_DERIVED).await?;
+    conn.execute_batch(MIGRATION_DERIVED_MEMORY).await?;
     tracing::info!("derived FTS5 schema bootstrapped in '{derived_path}'");
     Ok(())
 }
@@ -184,6 +199,9 @@ pub async fn run_migrations(conn: &Connection) -> Result<(), libsql::Error> {
     conn.execute_batch(MIGRATION_WORKSPACE_DATABASES).await?;
     conn.execute_batch(MIGRATION_REMOVE_BILLING).await?;
     conn.execute_batch(MIGRATION_BLOB_BACKENDS).await?;
+    add_column_if_missing(conn, "events", "caused_by_event_id", MIGRATION_EVENTS_CAUSED_BY).await?;
+    add_column_if_missing(conn, "events", "schema_version", MIGRATION_EVENTS_SCHEMA_VERSION).await?;
+    conn.execute_batch(MIGRATION_MEMORY).await?;
     tracing::info!("migrations applied (core + control plane)");
     Ok(())
 }

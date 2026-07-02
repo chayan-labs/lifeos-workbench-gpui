@@ -18,6 +18,7 @@ const GraphView = lazy(() => import('./pages/GraphView'));
 const InstalledModulePage = lazy(() => import('./pages/InstalledModulePage'));
 const ModuleDashboards = lazy(() => import('./pages/ModuleDashboards'));
 const AgentLedger = lazy(() => import('./pages/AgentLedger'));
+const MemoryInspector = lazy(() => import('./pages/MemoryInspector'));
 const Marketplace = lazy(() => import('./pages/Marketplace'));
 
 const PageFallback = () => (
@@ -169,6 +170,14 @@ export default function App() {
           element={
             <Layout onLogout={handleLogout}>
               <Marketplace />
+            </Layout>
+          }
+        />
+        <Route
+          path="/memory"
+          element={
+            <Layout onLogout={handleLogout}>
+              <MemoryInspector />
             </Layout>
           }
         />
