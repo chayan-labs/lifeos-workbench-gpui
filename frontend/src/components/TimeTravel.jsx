@@ -9,6 +9,7 @@ import {
 import {
   listFileEntities, commitFile, getHistory, getDiff, listRefs, createBranch, createTag, readSnapshot, textToBase64,
 } from '../lib/vcsApi';
+import BlobView from './BlobView';
 
 // VCS + time-travel surface, two independent layers:
 // - Files (lifeos-vcs, issue #86/#87): real committed file content, CAS +
@@ -34,6 +35,7 @@ function FileVersioning() {
   const [flash, setFlash] = useState('');
   const [diffPair, setDiffPair] = useState(null); // { old, new }
   const [diff, setDiff] = useState(null);
+  const [viewing, setViewing] = useState(null); // a VersionEntry to render inline
 
   const refreshFiles = useCallback(async () => {
     try {
@@ -49,6 +51,7 @@ function FileVersioning() {
     setSelected(entity);
     setDiff(null);
     setDiffPair(null);
+    setViewing(null);
     try {
       const h = await getHistory(entity.id);
       setHistory(h); // oldest first
@@ -165,18 +168,41 @@ function FileVersioning() {
                         <span className="font-bold text-neo-text truncate">{v.message || '(no message)'}</span>
                         <span className="font-mono text-neo-text-muted">{shortRef(v.blob_ref)} · {v.author} · {new Date(v.ts * 1000).toLocaleString()}</span>
                       </div>
-                      {older && (
+                      <div className="flex items-center gap-1 shrink-0">
                         <button
-                          onClick={() => loadDiff(selected.id, older.blob_ref, v.blob_ref)}
-                          className="neo-btn bg-neo-surface-high text-neo-text py-1 px-2 text-[10px] shrink-0"
+                          onClick={() => setViewing(viewing?.blob_ref === v.blob_ref ? null : v)}
+                          className={`neo-btn py-1 px-2 text-[10px] ${viewing?.blob_ref === v.blob_ref ? 'bg-neo-yellow text-neo-text' : 'bg-neo-surface-high text-neo-text'}`}
                         >
-                          diff vs previous
+                          {viewing?.blob_ref === v.blob_ref ? 'hide' : 'view'}
                         </button>
-                      )}
+                        {older && (
+                          <button
+                            onClick={() => loadDiff(selected.id, older.blob_ref, v.blob_ref)}
+                            className="neo-btn bg-neo-surface-high text-neo-text py-1 px-2 text-[10px]"
+                          >
+                            diff vs previous
+                          </button>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
               </div>
+
+              {viewing && (
+                <div className="flex flex-col gap-2 p-3 neo-border bg-neo-surface-high">
+                  <span className="neo-label-sm text-neo-text-muted">
+                    Content at {shortRef(viewing.blob_ref)} - fetched by hash from whichever backend holds it
+                  </span>
+                  <BlobView
+                    blobRef={viewing.blob_ref}
+                    name={selected.attrs?.name || selected.title}
+                    mime={selected.attrs?.mime}
+                    size={selected.attrs?.size}
+                    version={viewing.message}
+                  />
+                </div>
+              )}
 
               {diffPair && (
                 <div className="flex flex-col gap-2 p-3 neo-border bg-neo-surface-high">

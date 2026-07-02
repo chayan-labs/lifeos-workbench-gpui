@@ -63,9 +63,19 @@ pub trait StorageBackend: Send + Sync {
     /// hash is a no-op or an equal-content overwrite, never an error.
     async fn put(&self, hash: &str, bytes: &[u8]) -> Result<(), BackendError>;
 
+    /// Fetches the stored bytes without integrity verification. Implementor
+    /// detail - callers use [`StorageBackend::get`]. On the trait (rather
+    /// than private) so wrappers like the encryption layer (issue #110) can
+    /// transform stored bytes back into plaintext *before* the plaintext
+    /// hash check runs.
+    async fn fetch_unverified(&self, hash: &str) -> Result<Vec<u8>, BackendError>;
+
     /// Fetches the bytes for `hash`, re-hashing them with BLAKE3 and
-    /// rejecting a mismatch before returning.
-    async fn get(&self, hash: &str) -> Result<Vec<u8>, BackendError>;
+    /// rejecting a mismatch before returning. Provided: every backend gets
+    /// the same non-negotiable integrity check.
+    async fn get(&self, hash: &str) -> Result<Vec<u8>, BackendError> {
+        verify_bytes(hash, self.fetch_unverified(hash).await?)
+    }
 
     async fn has(&self, hash: &str) -> Result<bool, BackendError>;
 
@@ -108,12 +118,11 @@ impl StorageBackend for LocalFsBackend {
         Ok(())
     }
 
-    async fn get(&self, hash: &str) -> Result<Vec<u8>, BackendError> {
-        let bytes = self.store.read_object(hash).map_err(|e| match e.kind() {
+    async fn fetch_unverified(&self, hash: &str) -> Result<Vec<u8>, BackendError> {
+        self.store.read_object(hash).map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound => BackendError::NotFound { hash: hash.to_string() },
             _ => BackendError::Io(e),
-        })?;
-        verify_bytes(hash, bytes)
+        })
     }
 
     async fn has(&self, hash: &str) -> Result<bool, BackendError> {
@@ -166,13 +175,13 @@ impl StorageBackend for ExternalObjectStoreBackend {
         Ok(())
     }
 
-    async fn get(&self, hash: &str) -> Result<Vec<u8>, BackendError> {
+    async fn fetch_unverified(&self, hash: &str) -> Result<Vec<u8>, BackendError> {
         let result = self.inner.get(&Self::object_path(hash)).await.map_err(|e| match e {
             object_store::Error::NotFound { .. } => BackendError::NotFound { hash: hash.to_string() },
             other => BackendError::Store(other),
         })?;
         let bytes = result.bytes().await.map_err(BackendError::Store)?;
-        verify_bytes(hash, bytes.to_vec())
+        Ok(bytes.to_vec())
     }
 
     async fn has(&self, hash: &str) -> Result<bool, BackendError> {

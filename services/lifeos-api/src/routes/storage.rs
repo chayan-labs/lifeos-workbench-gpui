@@ -150,6 +150,146 @@ pub async fn create(
     }
 }
 
+#[derive(Deserialize)]
+pub struct MigrateRequest {
+    /// The `storage_backend` config entity to become the new primary. Must
+    /// already be `active` - i.e. its creation was already human-approved
+    /// (docs/STORAGE-BACKENDS.md §4), so the move itself is authorized.
+    target_backend_id: String,
+    workspace_id: Option<String>,
+}
+
+/// `POST /api/storage/migrate` - enqueues a `storage_migrate` job that
+/// re-puts every live object onto the target backend, then flips the
+/// primary pointer (issue #108). Identity is the hash, so no entity/edge/
+/// event/snapshot is rewritten. Returns 202 + job_id; progress lands in the
+/// job's payload; `has`-before-put makes a re-run resume where it stopped.
+pub async fn migrate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<MigrateRequest>,
+) -> ApiResult<(axum::http::StatusCode, Json<Value>)> {
+    let workspace_id = resolve_workspace(&headers, &state.config.jwt_secret, req.workspace_id.as_deref());
+    let target = fetch_backend_config(&state, &workspace_id, &req.target_backend_id).await?;
+    if target.status.as_deref() != Some("active") {
+        return Err(ApiError::BadRequest(
+            "target backend is not active - approve it first (gated action)".into(),
+        ));
+    }
+
+    let payload = json!({ "target_backend_id": req.target_backend_id });
+    let job_id = super::job::enqueue(&state, &workspace_id, "storage_migrate", &payload, 0).await?;
+
+    let task_state = state.clone();
+    let task_ws = workspace_id.clone();
+    let task_job = job_id.clone();
+    let task_target = req.target_backend_id.clone();
+    tokio::spawn(async move {
+        if let Err(e) = run_migration(&task_state, &task_ws, &task_job, &task_target).await {
+            tracing::error!("storage migration {task_job} failed: {e:?}");
+            let _ = task_state
+                .conn
+                .execute(
+                    "UPDATE jobs SET status='failed', error=?2 WHERE id=?1",
+                    libsql::params![task_job, format!("{e:?}")],
+                )
+                .await;
+        }
+    });
+    Ok((axum::http::StatusCode::ACCEPTED, Json(json!({ "status": "queued", "job_id": job_id }))))
+}
+
+async fn fetch_backend_config(state: &AppState, workspace_id: &str, id: &str) -> ApiResult<Entity> {
+    let mut rows = state
+        .conn
+        .query(
+            &format!(
+                "SELECT {COLS_ENTITY} FROM entities \
+                 WHERE id = ?1 AND workspace_id = ?2 AND module = 'storage' AND type = 'storage_backend'"
+            ),
+            libsql::params![id, workspace_id],
+        )
+        .await?;
+    match rows.next().await? {
+        Some(row) => Ok(read_entity(&row)?),
+        None => Err(ApiError::NotFound(format!("no storage backend '{id}'"))),
+    }
+}
+
+/// The migration itself: every live object hash (entity blob_refs +
+/// snapshots + their chunks) re-put onto the target with fallback reads
+/// across the local CAS and existing backends, progress persisted into the
+/// jobs row, and - only on a fully clean run - the primary pointer flip.
+async fn run_migration(state: &AppState, workspace_id: &str, job_id: &str, target_id: &str) -> ApiResult<()> {
+    state
+        .conn
+        .execute("UPDATE jobs SET status='running' WHERE id=?1", libsql::params![job_id])
+        .await?;
+
+    let target_entity = fetch_backend_config(state, workspace_id, target_id).await?;
+    let target = crate::storage::backend_from_config(state, workspace_id, target_id, &target_entity.attrs).await?;
+    let sources = crate::storage::read_backends(state, workspace_id).await?;
+
+    let live = lifeos_vcs::live_object_hashes(&state.conn, &state.vcs_store)
+        .await
+        .map_err(|e| ApiError::Internal(format!("live-set scan failed: {e}")))?;
+    let mut hashes: Vec<String> = live.into_iter().collect();
+    hashes.sort();
+
+    let report = lifeos_vcs::migrate_objects(&sources, target.as_ref(), &hashes, |_, _| {})
+        .await
+        .map_err(|e| ApiError::Internal(format!("migration failed: {e}")))?;
+
+    let progress = json!({
+        "target_backend_id": target_id,
+        "migrated": report.migrated,
+        "skipped": report.skipped,
+        "failed": report.failed,
+        "total": hashes.len(),
+    });
+    if report.failed > 0 {
+        state
+            .conn
+            .execute(
+                "UPDATE jobs SET status='failed', payload=?2, error=?3 WHERE id=?1",
+                libsql::params![
+                    job_id,
+                    progress.to_string(),
+                    format!("{} object(s) could not be migrated", report.failed)
+                ],
+            )
+            .await?;
+        return Ok(()); // primary pointer NOT flipped on a partial copy
+    }
+
+    // Flip the primary pointer: target becomes default, everything else not.
+    let now = now_secs();
+    state
+        .conn
+        .execute(
+            "UPDATE entities SET attrs = json_set(attrs, '$.default', json('false')), updated_at = ?1 \
+             WHERE workspace_id = ?2 AND module = 'storage' AND type = 'storage_backend' AND id != ?3",
+            libsql::params![now, workspace_id, target_id],
+        )
+        .await?;
+    state
+        .conn
+        .execute(
+            "UPDATE entities SET attrs = json_set(attrs, '$.default', json('true')), updated_at = ?1 WHERE id = ?2",
+            libsql::params![now, target_id],
+        )
+        .await?;
+    state
+        .conn
+        .execute(
+            "UPDATE jobs SET status='done', payload=?2 WHERE id=?1",
+            libsql::params![job_id, progress.to_string()],
+        )
+        .await?;
+    emit(&state.conn, workspace_id, "storage.migrated", Some(target_id), "api", &progress).await?;
+    Ok(())
+}
+
 /// Envelope-encrypts non-Nango backend keys into a `connections` row and
 /// returns its id - the only artifact the config entity references.
 async fn store_keys(state: &AppState, workspace_id: &str, kind: &str, keys: &Value) -> ApiResult<String> {

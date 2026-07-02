@@ -3,7 +3,32 @@
 // versions browser-only app settings via localStorage - a different concern
 // from committed file content living in lifeos-vcs's CAS.
 
-import { apiCall } from './api';
+import { API_BASE, apiCall, authHeaders } from './api';
+
+// Content-addressed blobs are immutable, so a fetched blob never goes
+// stale - cache by blob_ref for the session (issue #109's "local content
+// cache"). Values are Promises so concurrent callers share one request.
+const blobCache = new Map();
+
+// Fetch raw blob bytes by content hash via GET /api/vcs/blob (local CAS
+// first, then the workspace's storage backends - issues #108/#109).
+// Returns a Uint8Array.
+export function fetchBlob(blobRef) {
+  if (!blobCache.has(blobRef)) {
+    const promise = (async () => {
+      const res = await fetch(`${API_BASE}/api/vcs/blob?blob_ref=${encodeURIComponent(blobRef)}`, {
+        headers: authHeaders(false),
+      });
+      if (!res.ok) throw new Error(`blob fetch failed (${res.status})`);
+      return new Uint8Array(await res.arrayBuffer());
+    })().catch((e) => {
+      blobCache.delete(blobRef); // don't cache failures
+      throw e;
+    });
+    blobCache.set(blobRef, promise);
+  }
+  return blobCache.get(blobRef);
+}
 
 export async function listFileEntities() {
   const { ok, data, error } = await apiCall('GET', '/api/entity?module=files&type=file');

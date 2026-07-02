@@ -181,6 +181,28 @@ fn nango_provider(kind: &str) -> Option<ProxyProvider> {
     }
 }
 
+/// Wraps `backend` in client-side envelope encryption (issue #110) when the
+/// config asks for it: the provider stores ciphertext only, under the
+/// per-workspace envelope key. Hashes stay computed over plaintext, so the
+/// `blob_ref` is unchanged by the wrap.
+async fn maybe_encrypt(
+    state: &AppState,
+    workspace_id: &str,
+    attrs: &Value,
+    backend: Arc<dyn StorageBackend>,
+) -> ApiResult<Arc<dyn StorageBackend>> {
+    if attrs["encryption"].as_bool() != Some(true) {
+        return Ok(backend);
+    }
+    let master_key = state
+        .config
+        .secret_encryption_key
+        .as_ref()
+        .ok_or_else(|| ApiError::NotImplemented("LIFEOS_SECRET_ENCRYPTION_KEY is not configured".into()))?;
+    let envelope_key = crypto::ensure_envelope_key(&state.conn, master_key, workspace_id).await?;
+    Ok(Arc::new(lifeos_vcs::EncryptedBackend::new(backend, envelope_key)))
+}
+
 /// Builds the live backend for one `storage_backend` config entity.
 pub async fn backend_from_config(
     state: &AppState,
@@ -190,7 +212,15 @@ pub async fn backend_from_config(
 ) -> ApiResult<Arc<dyn StorageBackend>> {
     let kind = attrs["kind"].as_str().unwrap_or("local-fs");
     if kind == "local-fs" {
-        return Ok(Arc::new(LocalFsBackend::new(state.config.vcs_blob_root.clone())));
+        // `folder` optionally points local-fs at a user-chosen directory
+        // (e.g. an external disk); default stays the API's blob root.
+        let root = attrs["folder"]
+            .as_str()
+            .filter(|f| !f.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| state.config.vcs_blob_root.clone());
+        let backend: Arc<dyn StorageBackend> = Arc::new(LocalFsBackend::new(root));
+        return maybe_encrypt(state, workspace_id, attrs, backend).await;
     }
     let connection_id = attrs["connection_id"]
         .as_str()
@@ -211,14 +241,15 @@ pub async fn backend_from_config(
             connection_id: nango_connection_id,
             provider_config_key: kind.to_string(),
         });
-        return Ok(Arc::new(ProxiedFileBackend::new(
+        let backend: Arc<dyn StorageBackend> = Arc::new(ProxiedFileBackend::new(
             provider,
             proxy,
             (*state.conn).clone(),
             workspace_id,
             backend_id,
             folder,
-        )));
+        ));
+        return maybe_encrypt(state, workspace_id, attrs, backend).await;
     }
 
     let secrets = auth
@@ -231,16 +262,18 @@ pub async fn backend_from_config(
             username: required(&secrets, "username", kind)?.to_string(),
             password: secrets["password"].as_str().unwrap_or_default().to_string(),
         });
-        return Ok(Arc::new(ProxiedFileBackend::new(
+        let backend: Arc<dyn StorageBackend> = Arc::new(ProxiedFileBackend::new(
             ProxyProvider::WebDav,
             proxy,
             (*state.conn).clone(),
             workspace_id,
             backend_id,
             folder,
-        )));
+        ));
+        return maybe_encrypt(state, workspace_id, attrs, backend).await;
     }
-    Ok(Arc::new(ExternalObjectStoreBackend::new(bucket_store(kind, &secrets)?)))
+    let backend: Arc<dyn StorageBackend> = Arc::new(ExternalObjectStoreBackend::new(bucket_store(kind, &secrets)?));
+    maybe_encrypt(state, workspace_id, attrs, backend).await
 }
 
 /// The workspace's active storage backends: the primary (writes) first,
@@ -273,4 +306,29 @@ pub async fn primary_backend(state: &AppState, workspace_id: &str) -> ApiResult<
         Some((id, attrs)) => backend_from_config(state, workspace_id, &id, &attrs).await,
         None => Ok(Arc::new(LocalFsBackend::new(state.config.vcs_blob_root.clone()))),
     }
+}
+
+/// Every backend a read may consult, in fallback order: the local CAS first
+/// (cache/default), then the primary, then mirrors (issue #108).
+pub async fn read_backends(state: &AppState, workspace_id: &str) -> ApiResult<Vec<Arc<dyn StorageBackend>>> {
+    let mut backends: Vec<Arc<dyn StorageBackend>> =
+        vec![Arc::new(LocalFsBackend::new(state.config.vcs_blob_root.clone()))];
+    for (id, attrs) in active_backend_configs(state, workspace_id).await? {
+        backends.push(backend_from_config(state, workspace_id, &id, &attrs).await?);
+    }
+    Ok(backends)
+}
+
+/// Fetches a whole blob by `blob_ref` with cross-backend fallback - the
+/// frontend's blob fetch (issue #109) and any other by-hash content read.
+pub async fn read_blob(state: &AppState, workspace_id: &str, blob_ref: &str) -> ApiResult<Vec<u8>> {
+    let backends = read_backends(state, workspace_id).await?;
+    lifeos_vcs::read_blob_with_fallback(&backends, blob_ref)
+        .await
+        .map_err(|e| match e {
+            lifeos_vcs::BackendError::NotFound { hash } => {
+                ApiError::NotFound(format!("blob {hash} not found on any backend"))
+            }
+            other => ApiError::Internal(format!("blob read failed: {other}")),
+        })
 }

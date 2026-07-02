@@ -204,6 +204,11 @@ pub fn dispatch(kind: &str) -> Dispatch {
         "eval" => Dispatch::Stub("harness eval"),
         "reconcile" => Dispatch::Stub("lifeos-api reconcile"),
         "action" => Dispatch::Stub("lifeos-actions run"),
+        // Storage migrations (issue #108) run inside lifeos-api (it owns the
+        // Nango/secret_enc clients backends need); a row drained here (API
+        // was down when it fired) is acknowledged like reconcile, and the
+        // API's has-before-put resume makes re-running it from the API safe.
+        "storage_migrate" => Dispatch::Stub("lifeos-api storage migration"),
         _ => Dispatch::Unknown,
     }
 }
@@ -773,6 +778,7 @@ mod tests {
         assert_eq!(dispatch("ingest"), Dispatch::Ingest);
         assert_eq!(dispatch("pipeline"), Dispatch::Pipeline);
         assert_eq!(dispatch("action"), Dispatch::Stub("lifeos-actions run"));
+        assert_eq!(dispatch("storage_migrate"), Dispatch::Stub("lifeos-api storage migration"));
         assert_eq!(dispatch("nonsense"), Dispatch::Unknown);
     }
 }

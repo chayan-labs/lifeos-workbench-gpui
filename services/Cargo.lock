@@ -2054,12 +2054,14 @@ dependencies = [
 name = "lifeos-vcs"
 version = "1.0.0"
 dependencies = [
+ "aes-gcm",
  "async-trait",
  "blake3",
  "bytes",
  "fastcdc",
  "libsql",
  "object_store",
+ "rand 0.8.6",
  "serde",
  "serde_json",
  "similar",

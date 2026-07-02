@@ -94,8 +94,8 @@ mod tests {
             self.puts.fetch_add(1, Ordering::SeqCst);
             self.inner.put(hash, bytes).await
         }
-        async fn get(&self, hash: &str) -> Result<Vec<u8>, BackendError> {
-            self.inner.get(hash).await
+        async fn fetch_unverified(&self, hash: &str) -> Result<Vec<u8>, BackendError> {
+            self.inner.fetch_unverified(hash).await
         }
         async fn has(&self, hash: &str) -> Result<bool, BackendError> {
             self.inner.has(hash).await

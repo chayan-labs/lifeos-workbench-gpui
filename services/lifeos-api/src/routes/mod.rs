@@ -117,9 +117,12 @@ pub fn router(state: AppState) -> Router {
         .route("/api/vcs/branch", post(vcs::create_branch))
         .route("/api/vcs/tag", post(vcs::create_tag))
         .route("/api/vcs/snapshot", get(vcs::read_snapshot))
+        .route("/api/vcs/blob", get(vcs::blob))
         // --- per-workspace storage backends (issue #107): reads free,
-        //     add/switch gated (docs/STORAGE-BACKENDS.md §4) ---
+        //     add/switch gated (docs/STORAGE-BACKENDS.md §4); migration is a
+        //     resumable job that flips the primary pointer (issue #108) ---
         .route("/api/storage/backends", get(storage::list).post(storage::create))
+        .route("/api/storage/migrate", post(storage::migrate))
         .route("/api/notion/list", get(notion::list))
         .route("/api/notion/create", post(notion::create))
         // --- Notion module: two-way sync in/back (issue #59) ---

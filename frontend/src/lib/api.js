@@ -397,8 +397,9 @@ export const API_ROUTES = [
 // Tenant + soft-auth headers attached to every request, mirroring core/db.js's
 // header shape (X-Workspace-Id always; Authorization only once a key_token
 // exists). Without these the backend silently falls back to the default
-// workspace, masking tenant bugs - see FRONTEND.md §1.
-function authHeaders(json) {
+// workspace, masking tenant bugs - see FRONTEND.md §1. Exported for the
+// rare non-JSON fetch (raw blob bytes in lib/vcsApi.js).
+export function authHeaders(json) {
   const headers = {};
   if (json) headers['Content-Type'] = 'application/json';
   headers['X-Workspace-Id'] = localStorage.getItem(WORKSPACE_ID_KEY) || DEFAULT_WORKSPACE_ID;

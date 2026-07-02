@@ -362,3 +362,25 @@ async fn fetch_one(state: &AppState, workspace_id: &str, id: &str) -> ApiResult<
         None => Err(ApiError::NotFound(format!("entity '{id}' not found"))),
     }
 }
+
+#[derive(Deserialize)]
+pub struct BlobQuery {
+    blob_ref: String,
+    workspace_id: Option<String>,
+}
+
+/// `GET /api/vcs/blob` - fetch any blob by content hash with cross-backend
+/// fallback (issues #108/#109, docs/STORAGE-BACKENDS.md §5): local CAS
+/// first, then the workspace's primary/mirror backends. Bytes are
+/// BLAKE3-verified wherever they came from. Always served as octet-stream -
+/// rendering decisions (markdown vs placeholder) belong to the frontend,
+/// which knows the entity's mime.
+pub async fn blob(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<BlobQuery>,
+) -> ApiResult<Response> {
+    let workspace_id = resolve_workspace(&headers, &state.config.jwt_secret, q.workspace_id.as_deref());
+    let bytes = crate::storage::read_blob(&state, &workspace_id, &q.blob_ref).await?;
+    Ok(([("content-type", "application/octet-stream")], bytes).into_response())
+}

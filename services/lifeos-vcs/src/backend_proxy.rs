@@ -15,7 +15,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use libsql::Connection;
 
-use crate::backend::{verify_bytes, BackendError, StorageBackend};
+use crate::backend::{BackendError, StorageBackend};
 use crate::backend_index::{forget_location, location_for, record_location};
 
 /// One opaque HTTP exchange. The implementor injects auth (Nango
@@ -298,7 +298,7 @@ impl StorageBackend for ProxiedFileBackend {
         self.remember(hash, &locator, now).await
     }
 
-    async fn get(&self, hash: &str) -> Result<Vec<u8>, BackendError> {
+    async fn fetch_unverified(&self, hash: &str) -> Result<Vec<u8>, BackendError> {
         let locator = match self.indexed_locator(hash).await? {
             Some(l) => l,
             // Path-shaped providers can derive the locator; Drive cannot.
@@ -312,7 +312,7 @@ impl StorageBackend for ProxiedFileBackend {
         if resp.status >= 300 {
             return Err(BackendError::Other(format!("download: provider returned {}", resp.status)));
         }
-        verify_bytes(hash, resp.body)
+        Ok(resp.body)
     }
 
     async fn has(&self, hash: &str) -> Result<bool, BackendError> {

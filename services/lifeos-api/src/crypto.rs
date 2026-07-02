@@ -64,6 +64,46 @@ pub fn random_key() -> EncryptionKey {
     key
 }
 
+/// Ensures `workspaces.envelope_key_enc` is set, generating + storing one
+/// under the server's master key if it isn't yet. Idempotent. Shared by
+/// database-per-workspace provisioning (issue #104) and client-side blob
+/// encryption (issue #110) so both derive the same per-workspace key.
+pub async fn ensure_envelope_key(
+    conn: &libsql::Connection,
+    master_key: &EncryptionKey,
+    workspace_id: &str,
+) -> Result<EncryptionKey, ApiError> {
+    let mut rows = conn
+        .query(
+            "SELECT envelope_key_enc FROM workspaces WHERE id = ?1",
+            libsql::params![workspace_id],
+        )
+        .await?;
+    let existing: Option<String> = match rows.next().await? {
+        Some(row) => row.get(0)?,
+        None => return Err(ApiError::BadRequest(format!("unknown workspace '{workspace_id}'"))),
+    };
+    if let Some(enc) = existing {
+        let raw = decrypt(&enc, master_key)?;
+        let bytes = STANDARD
+            .decode(raw)
+            .map_err(|_| ApiError::Internal("envelope_key_enc did not decode to raw key bytes".into()))?;
+        return bytes
+            .try_into()
+            .map_err(|_| ApiError::Internal("envelope key is not 32 bytes".into()));
+    }
+
+    let key = random_key();
+    let key_b64 = STANDARD.encode(key);
+    let enc = encrypt(&key_b64, master_key)?;
+    conn.execute(
+        "UPDATE workspaces SET envelope_key_enc = ?1, updated_at = ?2 WHERE id = ?3",
+        libsql::params![enc, crate::ids::now_secs(), workspace_id],
+    )
+    .await?;
+    Ok(key)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

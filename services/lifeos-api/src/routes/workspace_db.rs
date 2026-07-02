@@ -9,7 +9,6 @@ use crate::error::{ApiError, ApiResult};
 use crate::ids::now_secs;
 use crate::state::AppState;
 use axum::{extract::State, http::HeaderMap, Json};
-use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -22,45 +21,13 @@ fn platform_token_or_501(state: &AppState) -> ApiResult<(&str, &str)> {
     }
 }
 
-/// Ensures `workspaces.envelope_key_enc` is set, generating + storing one
-/// under the server's master key if it isn't yet. Idempotent.
+/// Ensures `workspaces.envelope_key_enc` is set (shared logic in
+/// `crypto::ensure_envelope_key` since issue #110 uses the same key).
 async fn ensure_envelope_key(state: &AppState, workspace_id: &str) -> ApiResult<crypto::EncryptionKey> {
     let master_key = state.config.secret_encryption_key.as_ref().ok_or_else(|| {
         ApiError::NotImplemented("LIFEOS_SECRET_ENCRYPTION_KEY not configured".into())
     })?;
-
-    let mut rows = state
-        .conn
-        .query(
-            "SELECT envelope_key_enc FROM workspaces WHERE id = ?1",
-            libsql::params![workspace_id],
-        )
-        .await?;
-    let existing: Option<String> = match rows.next().await? {
-        Some(row) => row.get(0)?,
-        None => return Err(ApiError::BadRequest(format!("unknown workspace '{workspace_id}'"))),
-    };
-    if let Some(enc) = existing {
-        let raw = crypto::decrypt(&enc, master_key)?;
-        let bytes = STANDARD
-            .decode(raw)
-            .map_err(|_| ApiError::Internal("envelope_key_enc did not decode to raw key bytes".into()))?;
-        return bytes
-            .try_into()
-            .map_err(|_| ApiError::Internal("envelope key is not 32 bytes".into()));
-    }
-
-    let key = crypto::random_key();
-    let key_b64 = STANDARD.encode(key);
-    let enc = crypto::encrypt(&key_b64, master_key)?;
-    state
-        .conn
-        .execute(
-            "UPDATE workspaces SET envelope_key_enc = ?1, updated_at = ?2 WHERE id = ?3",
-            libsql::params![enc, now_secs(), workspace_id],
-        )
-        .await?;
-    Ok(key)
+    crypto::ensure_envelope_key(&state.conn, master_key, workspace_id).await
 }
 
 #[derive(Deserialize)]
