@@ -26,6 +26,15 @@ Everything else - tasks, trades-journal entries, topics, posts/drafts, campaigns
 
 This is deliberately the inverse of a deny-list product: the agent's reach is broad by default and narrowed only at the four cut-lines above, each of which maps to a fail-closed guard.
 
+**Release-loop config promote/rollback (issue #98, `docs/HARNESS-LOOP.md`
+§4) is human-typed-only, never agent/hook/cron-callable.** A learned
+routing prior isn't literally "security & gating config" (row 2 above),
+so the agent may draft a candidate via `POST /api/configs` - but the
+`.../promote` and `.../rollback` routes are only ever called by
+`harness config promote|rollback`, a CLI a human types. No tool in the
+action registry (§2 below) wraps them, matching the same never-agent-
+callable carve-out used for real order execution.
+
 ---
 
 ## 2. The typed action registry (how actuation works)

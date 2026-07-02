@@ -105,6 +105,43 @@ A `lifeos-release` learner turns logged outcomes into **candidate** versioned `c
 - Rollback = one pointer flip; every flip is an `event`.
 - Nothing auto-activates: a candidate only goes live after explicit human `config promote`.
 
+**Implemented (issue #98):** a new `configs` table
+(`migrations/0006_release_configs.sql`, `kind='route_prior'` is the only
+kind so far) holds versioned candidates (`draft -> shadow -> promoted |
+rejected`); the active pointer per `kind` reuses the existing `vcs_refs`
+named-pointer table (`kind='config_active'`, same atomic-flip shape
+`lifeos-vcs` branches/tags already use, issue #84) instead of a second
+pointer table. `POST /api/configs`, `.../:id/shadow`, `.../:id/promote`,
+`.../rollback`, `GET /api/configs` (`services/lifeos-api/src/routes/configs.rs`)
+implement the state machine; `promote`/`rollback` emit
+`events(type='config.promoted'|'config.rolledback')`.
+
+`~/.claude/bin/lifeos-release` (global harness repo, not this one) is the
+learner: it freezes the same frequency-based generality-penalty formula
+`route_core.py`'s live `attractor_prior()` already computes (see that
+function's docstring) into a versioned `route_prior` candidate, shadow-
+replays it against recent `route.jsonl` entries (re-ranks each entry's
+surfaced assets with the candidate bias and summarizes how much would
+have changed), and pings Telegram (`TELEGRAM_BOT_TOKEN`/
+`TELEGRAM_ADMIN_CHAT_ID`, same env vars `lifeos-drain` uses, degrades to
+a log line if unset) telling the human to review it. It never promotes
+anything itself.
+
+`~/.claude/bin/harness-config` (wired as `harness config
+{list,promote,rollback}`) is the **only** thing that ever calls the
+promote/rollback routes - always human-typed, never agent/hook/cron-
+callable (docs/AGENT-CONTROL.md §1). On promote/rollback it also
+materializes the now-active payload to
+`~/.claude/logs/route_prior_active.json` - `route_core.py`'s new
+`promoted_prior()` reads that static file (fail-open: missing/
+unparseable → `{}`) and additively merges it with the live
+`attractor_prior()` penalty before the rerank subtraction. This keeps the
+hot routing path free of any DB/network dependency: the DB is the audit
+trail and rollback history, the file is a disposable materialization of
+"whatever is currently promoted." **Scope note:** only `kind='route_prior'`
+exists today; `configs`/`vcs_refs(kind='config_active')` generalize to
+other candidate-config kinds if ever wanted, with no schema change.
+
 ---
 
 ## 5. Cloud ↔ Mac queue (recap)

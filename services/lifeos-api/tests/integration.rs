@@ -687,3 +687,87 @@ async fn reconcile_replays_events_after_forced_conflict() {
     let (_, fetched) = send(&app.router, "GET", &format!("/api/entity/{id}"), None).await;
     assert_eq!(fetched["attrs"]["status"], "done");
 }
+
+#[tokio::test]
+async fn config_draft_shadow_promote_rollback_flips_the_active_pointer() {
+    let app = test_app().await;
+
+    // Draft.
+    let (st, cfg1) = send(
+        &app.router,
+        "POST",
+        "/api/configs",
+        Some(json!({"kind": "route_prior", "payload": {"bias": {"skill:foo": -0.3}}})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(cfg1["status"], "draft");
+    let id1 = cfg1["id"].as_str().unwrap().to_string();
+
+    // Shadow.
+    let (st, cfg1) = send(
+        &app.router,
+        "POST",
+        &format!("/api/configs/{id1}/shadow"),
+        Some(json!({"shadow_summary": {"entries_replayed": 40, "rank_changes": 3}})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(cfg1["status"], "shadow");
+    assert_eq!(cfg1["shadow_summary"]["entries_replayed"], 40);
+
+    // Promote.
+    let (st, cfg1) = send(&app.router, "POST", &format!("/api/configs/{id1}/promote"), None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(cfg1["status"], "promoted");
+
+    let (_, listing) = send(&app.router, "GET", "/api/configs?kind=route_prior", None).await;
+    assert_eq!(listing["active"]["route_prior"], id1);
+
+    let (_, events) = send(&app.router, "GET", "/api/event?type=config.promoted", None).await;
+    assert_eq!(events[0]["attrs"]["config_id"], id1);
+
+    // A second candidate, promoted - becomes active.
+    let (_, cfg2) = send(
+        &app.router,
+        "POST",
+        "/api/configs",
+        Some(json!({"kind": "route_prior", "payload": {"bias": {"skill:bar": -0.5}}})),
+    )
+    .await;
+    let id2 = cfg2["id"].as_str().unwrap().to_string();
+    send(&app.router, "POST", &format!("/api/configs/{id2}/promote"), None).await;
+
+    let (_, listing) = send(&app.router, "GET", "/api/configs?kind=route_prior", None).await;
+    assert_eq!(listing["active"]["route_prior"], id2);
+
+    // Rollback reverts the active pointer to the first promoted config.
+    let (st, rolled) = send(
+        &app.router,
+        "POST",
+        "/api/configs/rollback",
+        Some(json!({"kind": "route_prior"})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(rolled["id"], id1);
+
+    let (_, listing) = send(&app.router, "GET", "/api/configs?kind=route_prior", None).await;
+    assert_eq!(listing["active"]["route_prior"], id1);
+
+    let (_, events) = send(&app.router, "GET", "/api/event?type=config.rolledback", None).await;
+    assert_eq!(events[0]["attrs"]["config_id"], id1);
+}
+
+#[tokio::test]
+async fn config_rollback_with_no_prior_promotion_is_rejected() {
+    let app = test_app().await;
+    let (st, _) = send(
+        &app.router,
+        "POST",
+        "/api/configs/rollback",
+        Some(json!({"kind": "route_prior"})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+}

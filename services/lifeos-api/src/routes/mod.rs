@@ -2,6 +2,7 @@
 
 mod browser;
 mod calendar;
+mod configs;
 mod connection;
 mod drive;
 mod entity;
@@ -138,5 +139,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/pipeline/registry", get(pipeline::registry))
         // --- read-only broker positions proxy (issue #51) - no order route exists ---
         .route("/api/broker/positions", get(kite::positions))
+        // --- Release-loop candidate configs (issue #98): draft -> shadow ->
+        //     promote|rollback, human-gated (docs/HARNESS-LOOP.md §4) ---
+        .route("/api/configs", post(configs::create).get(configs::list))
+        .route("/api/configs/:id/shadow", post(configs::shadow))
+        .route("/api/configs/:id/promote", post(configs::promote))
+        .route("/api/configs/rollback", post(configs::rollback))
         .with_state(state)
 }
