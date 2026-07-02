@@ -190,6 +190,12 @@ pub enum Dispatch {
 /// purpose: the real build path (#78) polls `module_requests` directly via
 /// `claim_next_module_request`, not through `jobs` - see that function's doc
 /// comment for why the two intake paths haven't converged yet.
+///
+/// `action` jobs (issue #93, `lifeos-actions`' Life OS Actions engine) are a
+/// stub too: a declared rule firing on a real `events` row and enqueuing a
+/// real, correctly-shaped `jobs` row is #93's whole acceptance bar (see
+/// `lifeos_actions::process_workspace_events`'s doc comment) - what the job
+/// actually *does* is deferred, same as `module_build`/`eval`/`reconcile`.
 pub fn dispatch(kind: &str) -> Dispatch {
     match kind {
         "ingest" => Dispatch::Ingest,
@@ -197,6 +203,7 @@ pub fn dispatch(kind: &str) -> Dispatch {
         "module_build" => Dispatch::Stub("scaffold.js"),
         "eval" => Dispatch::Stub("harness eval"),
         "reconcile" => Dispatch::Stub("lifeos-api reconcile"),
+        "action" => Dispatch::Stub("lifeos-actions run"),
         _ => Dispatch::Unknown,
     }
 }
@@ -745,6 +752,7 @@ mod tests {
     fn dispatch_routes_ingest_to_its_real_handler() {
         assert_eq!(dispatch("ingest"), Dispatch::Ingest);
         assert_eq!(dispatch("pipeline"), Dispatch::Pipeline);
+        assert_eq!(dispatch("action"), Dispatch::Stub("lifeos-actions run"));
         assert_eq!(dispatch("nonsense"), Dispatch::Unknown);
     }
 }

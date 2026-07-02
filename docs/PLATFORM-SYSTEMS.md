@@ -137,3 +137,28 @@ Examples:
 - `on topic.due` → quiz in Telegram.
 - **Engine:** 🦀 Rust hot event loop (part of `lifeos-pipelines` or standalone). Outward steps gated; internal steps free.
 - New automations need **zero new code** - just manifest entries.
+
+**Implemented (issue #93):** `services/lifeos-actions` is the real hot event
+loop, called once per `lifeos-drain` poll tick
+(`lifeos_actions::run_action_engine_tick`) - same standalone-crate
+convention as `lifeos-pipelines`/`lifeos-ingest`, no dependency on
+`lifeos-api`. `action_registry()` is a hardcoded Rust table today, seeded
+with the 3 examples this doc lists above verbatim (`asset.version_created`,
+`trade.closed`, `topic.due`); manifest-driven `actions: [...]` declarations
+are a deferred gap, same as `lifeos-pipelines::pipeline_registry()`'s.
+
+Per-workspace incremental scanning needs no new table: `events.id` is a
+time-ordered ULID, so `WHERE id > cursor ORDER BY id ASC` is a correct scan,
+and the cursor itself is one `entities` row per workspace
+(`module='actions', type='cursor'`) - "zero new tables" holds. `if`
+conditions are a real but intentionally minimal single-field-equality check
+over the triggering event's `attrs`, not a general expression language -
+same minimalism precedent as #92's `eval_stage_output`.
+
+A fired rule enqueues a real `jobs` row (`kind='action'`) plus an
+`action.fired` audit event - that is #93's whole acceptance bar ("a
+declared action fires on its event and enqueues the right job"). What the
+`action` job actually does downstream (thumbnail+caption+draft, equity
+curve + journal, Telegram quiz) is deferred: `lifeos-drain` dispatches it
+as an honest `Dispatch::Stub`, the same acknowledged-but-not-yet-wired
+shape already accepted for `module_build`/`eval`/`reconcile`.

@@ -1845,6 +1845,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "lifeos-actions"
+version = "1.0.0"
+dependencies = [
+ "libsql",
+ "serde",
+ "serde_json",
+ "tokio",
+ "ulid",
+]
+
+[[package]]
 name = "lifeos-api"
 version = "1.0.0"
 dependencies = [
@@ -1891,6 +1902,7 @@ version = "1.0.0"
 dependencies = [
  "async-trait",
  "libsql",
+ "lifeos-actions",
  "lifeos-ingest",
  "lifeos-pipelines",
  "lifeos-vcs",

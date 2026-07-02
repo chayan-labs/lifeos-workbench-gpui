@@ -22,6 +22,11 @@
 //! see #90, and pipeline jobs fail loudly too, see #92), LIFEOS_TESSERACT_BIN
 //! (optional path to the `tesseract` CLI binary - without it, image ingest
 //! still captions, just without OCR text, see #90).
+//!
+//! Each poll tick also runs the Life OS Actions engine (issue #93,
+//! `lifeos_actions::run_action_engine_tick`) - no extra env var needed, it
+//! reuses the already-open DB connection to scan `events` and enqueue
+//! `action` jobs for any declared rule that fires.
 
 use libsql::Builder;
 use lifeos_drain::{
@@ -161,6 +166,11 @@ async fn main() {
             Ok(n) if n > 0 => println!("lifeos-drain: reaped {n} stuck job(s)"),
             Ok(_) => {}
             Err(e) => eprintln!("lifeos-drain: reaper failed: {e}"),
+        }
+        match lifeos_actions::run_action_engine_tick(&conn, now_secs()).await {
+            Ok(n) if n > 0 => println!("lifeos-drain: actions engine fired {n} job(s)"),
+            Ok(_) => {}
+            Err(e) => eprintln!("lifeos-drain: actions engine tick failed: {e}"),
         }
         sleep(poll).await;
     }
