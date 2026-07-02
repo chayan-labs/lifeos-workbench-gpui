@@ -54,6 +54,19 @@ pub trait NangoClient: Send + Sync {
         query: &[(&str, &str)],
         body: Option<Value>,
     ) -> ApiResult<Value>;
+
+    /// Raw-byte proxy for storage backends (issue #107,
+    /// docs/STORAGE-BACKENDS.md §3): same server-side token injection as
+    /// `proxy`, but carries opaque request/response bytes plus provider
+    /// headers so blob content can move through Nango without JSON coercion.
+    /// Returns the upstream status untranslated - the storage layer decides
+    /// what a 404 means.
+    async fn proxy_raw(
+        &self,
+        connection_id: &str,
+        provider_config_key: &str,
+        req: &lifeos_vcs::ProxyRequest,
+    ) -> ApiResult<lifeos_vcs::ProxyResponse>;
 }
 
 /// Real implementation, calling the self-hosted Nango REST API.
@@ -142,6 +155,36 @@ impl NangoClient for HttpNangoClient {
         }
         let resp = req.send().await.map_err(nango_unreachable)?;
         decode_ok(resp, "proxy").await
+    }
+
+    async fn proxy_raw(
+        &self,
+        connection_id: &str,
+        provider_config_key: &str,
+        preq: &lifeos_vcs::ProxyRequest,
+    ) -> ApiResult<lifeos_vcs::ProxyResponse> {
+        let http_method = reqwest::Method::from_bytes(preq.method.as_bytes())
+            .map_err(|_| ApiError::BadRequest(format!("invalid proxy method '{}'", preq.method)))?;
+        let mut req = self
+            .http
+            .request(
+                http_method,
+                format!("{}/proxy/{}", self.base_url, preq.endpoint.trim_start_matches('/')),
+            )
+            .header("Connection-Id", connection_id)
+            .header("Provider-Config-Key", provider_config_key)
+            .bearer_auth(&self.secret_key)
+            .query(&preq.query);
+        for (name, value) in &preq.headers {
+            req = req.header(name, value);
+        }
+        if let Some(body) = &preq.body {
+            req = req.body(body.clone());
+        }
+        let resp = req.send().await.map_err(nango_unreachable)?;
+        let status = resp.status().as_u16();
+        let body = resp.bytes().await.map_err(nango_unreachable)?.to_vec();
+        Ok(lifeos_vcs::ProxyResponse { status, body })
     }
 }
 
@@ -255,6 +298,23 @@ pub mod mock {
                 .get(&key)
                 .cloned()
                 .ok_or_else(|| ApiError::Upstream(format!("no mock proxy response seeded for '{key}'")))
+        }
+
+        async fn proxy_raw(
+            &self,
+            _connection_id: &str,
+            provider_config_key: &str,
+            req: &lifeos_vcs::ProxyRequest,
+        ) -> ApiResult<lifeos_vcs::ProxyResponse> {
+            let key = format!("{provider_config_key}:{}:{}", req.method, req.endpoint);
+            self.calls.lock().unwrap().push(key.clone());
+            match self.proxy_responses.lock().unwrap().get(&key) {
+                Some(value) => Ok(lifeos_vcs::ProxyResponse {
+                    status: 200,
+                    body: value.to_string().into_bytes(),
+                }),
+                None => Ok(lifeos_vcs::ProxyResponse { status: 404, body: vec![] }),
+            }
         }
     }
 }

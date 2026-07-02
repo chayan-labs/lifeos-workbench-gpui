@@ -19,6 +19,7 @@ pub mod reading;
 pub mod reconcile;
 pub mod routes;
 pub mod state;
+pub mod storage;
 pub mod whatsapp;
 
 use crate::browser::{BrowserActuator, ProcessBrowserActuator};

@@ -1,6 +1,7 @@
 mod backend;
 mod backend_blob;
 mod backend_index;
+mod backend_proxy;
 mod blob;
 mod chunk;
 mod commit;
@@ -14,6 +15,7 @@ mod store;
 pub use backend::{BackendError, ExternalObjectStoreBackend, LocalFsBackend, StorageBackend};
 pub use backend_blob::{read_blob_from_backend, store_blob_on_backend};
 pub use backend_index::{forget_location, hashes_on_backend, location_for, record_location};
+pub use backend_proxy::{BackendProxy, ProxiedFileBackend, ProxyProvider, ProxyRequest, ProxyResponse};
 pub use blob::{read_blob, store_blob, BlobManifest};
 pub use chunk::{chunk_reader, ChunkRef};
 pub use commit::{commit_version, history, VersionEntry};

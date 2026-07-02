@@ -26,6 +26,7 @@ mod register;
 mod edge;
 mod search;
 mod slack;
+mod storage;
 mod stream;
 mod travel;
 mod vcs;
@@ -116,6 +117,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/vcs/branch", post(vcs::create_branch))
         .route("/api/vcs/tag", post(vcs::create_tag))
         .route("/api/vcs/snapshot", get(vcs::read_snapshot))
+        // --- per-workspace storage backends (issue #107): reads free,
+        //     add/switch gated (docs/STORAGE-BACKENDS.md §4) ---
+        .route("/api/storage/backends", get(storage::list).post(storage::create))
         .route("/api/notion/list", get(notion::list))
         .route("/api/notion/create", post(notion::create))
         // --- Notion module: two-way sync in/back (issue #59) ---
