@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import ATLAS_DATA from '../atlas_data.json';
 import { getCustomDomains, addCustomDomain, removeCustomDomain } from '../lib/atlasStore';
-import { scaffoldDomain, selectedAgent } from '../lib/ai';
+import { scaffoldDomain, llmSelection } from '../lib/ai';
 import { apiCall } from '../lib/api';
 
 // Palette + icons used to backfill metadata for domain entries that were
@@ -233,7 +233,7 @@ export default function KnowledgeAtlas() {
       const { ok, data } = await apiCall('POST', '/api/llm', {
         system: "You are a helpful study assistant. Answer the user's question based on the provided context.",
         prompt: `Context Quote: "${annData.quote}"\nQuestion: ${annData.text}`,
-        agent: selectedAgent(),
+        ...llmSelection(),
       });
       if (ok && data && data.text) {
         saveAnnotations(newAnns.map(a => a.id === annData.id ? { ...a, answer: data.text, answeredAt: new Date().toISOString() } : a));
@@ -253,7 +253,7 @@ export default function KnowledgeAtlas() {
 
   const callLLM = async (system, prompt) => {
     // Route through apiCall for API_BASE + tenant/auth headers (see above).
-    const { ok, data } = await apiCall('POST', '/api/llm', { system, prompt, agent: selectedAgent() });
+    const { ok, data } = await apiCall('POST', '/api/llm', { system, prompt, ...llmSelection() });
     if (ok && data && data.text) return data.text;
     {
       return new Promise(resolve => {

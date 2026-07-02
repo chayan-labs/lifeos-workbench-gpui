@@ -7,16 +7,31 @@
 import { apiCall } from './api';
 
 export const SELECTED_AGENT_KEY = 'life_os_selected_agent';
+export const SELECTED_MODEL_KEY = 'life_os_selected_model';
+// Fired by AgentPicker whenever the agent or model changes, so every mounted
+// picker (console, harness, ...) stays in sync without prop drilling.
+export const AGENT_CHANGED_EVENT = 'lifeos:agent-changed';
 
-// The agent picked in AgentHarness (or undefined for the backend's default).
-// Exported so every direct apiCall('POST', '/api/llm', ...) call site applies
-// the user's choice, not just callers that go through complete() below.
+// The agent/model picked in any AgentPicker (or undefined for the backend's
+// default). Exported so every direct apiCall('POST', '/api/llm', ...) call
+// site applies the user's choice, not just callers that go through
+// complete() below.
 export function selectedAgent() {
   return localStorage.getItem(SELECTED_AGENT_KEY) || undefined;
 }
 
+export function selectedModel() {
+  return localStorage.getItem(SELECTED_MODEL_KEY) || undefined;
+}
+
+// The standard body fields every /api/llm call should spread in, so agent
+// and model switching applies everywhere AI is used.
+export function llmSelection() {
+  return { agent: selectedAgent(), model: selectedModel() };
+}
+
 async function complete(system, prompt) {
-  const { ok, data } = await apiCall('POST', '/api/llm', { system, prompt, agent: selectedAgent() });
+  const { ok, data } = await apiCall('POST', '/api/llm', { system, prompt, ...llmSelection() });
   if (ok && data && (data.text || typeof data === 'string')) {
     return data.text || data;
   }

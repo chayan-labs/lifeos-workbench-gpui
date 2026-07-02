@@ -18,9 +18,12 @@
 //! LIFEOS_MEMVEC is set), LIFEOS_WHISPER_MODEL (optional path to a GGML
 //! whisper.cpp model, e.g. ggml-tiny.en.bin - without it, audio ingest jobs
 //! fail loudly rather than silently producing zero segments, see #89),
-//! ANTHROPIC_API_KEY (optional - without it, image ingest jobs fail loudly,
-//! see #90, and pipeline jobs fail loudly too, see #92; it also gates
-//! whether the pipeline eval stage uses a real Haiku judge or the length
+//! LIFEOS_AGENT / LIFEOS_AGENT_MODEL (optional - which local agent CLI and
+//! model the keyless AI lanes use; default is the first CLI detected on
+//! PATH), ANTHROPIC_API_KEY (optional FALLBACK - only consulted when no
+//! agent CLI is detected on PATH; without either, image ingest jobs fail
+//! loudly, see #90, and pipeline jobs fail loudly too, see #92; it also
+//! gates whether the pipeline eval stage uses a real judge or the length
 //! heuristic fallback, see #96), LIFEOS_TESSERACT_BIN
 //! (optional path to the `tesseract` CLI binary - without it, image ingest
 //! still captions, just without OCR text, see #90).
@@ -36,6 +39,7 @@
 //! `action` jobs for any declared rule that fires.
 
 use libsql::Builder;
+use lifeos_drain::ai::{AgentCliCaptioner, AgentCliJudge, AgentCliStageRunner};
 use lifeos_drain::{
     claim_job, claim_next_module_request, complete_job, dispatch, fail_job, notify_pipeline_gated,
     reap_stuck, run_module_build, Dispatch, DrainConfig, NoopNotifier, Notifier, ScaffoldJsBuilder,
@@ -129,11 +133,22 @@ async fn main() {
         }
     };
 
-    let captioner: Box<dyn Captioner> = match std::env::var("ANTHROPIC_API_KEY") {
-        Ok(api_key) if !api_key.is_empty() => Box::new(HaikuCaptioner { api_key }),
-        _ => {
-            println!("lifeos-drain: ANTHROPIC_API_KEY not set, image ingest jobs will fail loudly");
-            Box::new(NoopCaptioner)
+    // Keyless-first AI lanes (issue: run everything through the agent CLIs
+    // already on this machine): any detected CLI beats the API-key path.
+    let cli_agents = std::sync::Arc::new(lifeos_agents::detect());
+    if let Some(id) = lifeos_agents::default_agent_id(&cli_agents) {
+        println!("lifeos-drain: AI lanes use local agent CLI '{id}' (override with LIFEOS_AGENT/LIFEOS_AGENT_MODEL)");
+    }
+
+    let captioner: Box<dyn Captioner> = if !cli_agents.is_empty() {
+        Box::new(AgentCliCaptioner { agents: cli_agents.clone() })
+    } else {
+        match std::env::var("ANTHROPIC_API_KEY") {
+            Ok(api_key) if !api_key.is_empty() => Box::new(HaikuCaptioner { api_key }),
+            _ => {
+                println!("lifeos-drain: no agent CLI on PATH and ANTHROPIC_API_KEY not set, image ingest jobs will fail loudly");
+                Box::new(NoopCaptioner)
+            }
         }
     };
 
@@ -145,23 +160,31 @@ async fn main() {
         }
     };
 
-    let pipeline_runner: Box<dyn PipelineStageRunner> = match std::env::var("ANTHROPIC_API_KEY") {
-        Ok(api_key) if !api_key.is_empty() => Box::new(HaikuStageRunner { api_key }),
-        _ => {
-            println!("lifeos-drain: ANTHROPIC_API_KEY not set, pipeline jobs will fail loudly");
-            Box::new(NoopStageRunner)
+    let pipeline_runner: Box<dyn PipelineStageRunner> = if !cli_agents.is_empty() {
+        Box::new(AgentCliStageRunner { agents: cli_agents.clone() })
+    } else {
+        match std::env::var("ANTHROPIC_API_KEY") {
+            Ok(api_key) if !api_key.is_empty() => Box::new(HaikuStageRunner { api_key }),
+            _ => {
+                println!("lifeos-drain: no agent CLI on PATH and ANTHROPIC_API_KEY not set, pipeline jobs will fail loudly");
+                Box::new(NoopStageRunner)
+            }
         }
     };
 
-    // Real Haiku judge when a key is configured; otherwise fall back to
-    // `HeuristicJudge` itself (it implements `Judge` too) so eval-gated
-    // stages keep #92's original length-based behavior rather than every
-    // gate call erroring.
-    let pipeline_judge: Box<dyn Judge> = match std::env::var("ANTHROPIC_API_KEY") {
-        Ok(api_key) if !api_key.is_empty() => Box::new(HaikuJudge { api_key }),
-        _ => {
-            println!("lifeos-drain: ANTHROPIC_API_KEY not set, pipeline eval gate will use the length heuristic only");
-            Box::new(lifeos_pipelines::HeuristicJudge)
+    // Real judge when an agent CLI (preferred) or a key is available;
+    // otherwise fall back to `HeuristicJudge` itself (it implements `Judge`
+    // too) so eval-gated stages keep #92's original length-based behavior
+    // rather than every gate call erroring.
+    let pipeline_judge: Box<dyn Judge> = if !cli_agents.is_empty() {
+        Box::new(AgentCliJudge { agents: cli_agents.clone() })
+    } else {
+        match std::env::var("ANTHROPIC_API_KEY") {
+            Ok(api_key) if !api_key.is_empty() => Box::new(HaikuJudge { api_key }),
+            _ => {
+                println!("lifeos-drain: no agent CLI on PATH and ANTHROPIC_API_KEY not set, pipeline eval gate will use the length heuristic only");
+                Box::new(lifeos_pipelines::HeuristicJudge)
+            }
         }
     };
     let pipeline_eval_sample_rate = env_float("PIPELINE_EVAL_SAMPLE_RATE", 0.2);

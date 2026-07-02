@@ -12,7 +12,12 @@ export interface Env {
   // DB + Haiku bindings (issues #64/#65).
   TURSO_URL: string;
   TURSO_TOKEN: string;
-  ANTHROPIC_API_KEY: string;
+  // OPTIONAL - the bot's own light reasoning lane. Unset is fine: the bot
+  // still does full DB CRUD/recall, and heavy or AI work is enqueued to the
+  // Mac harness (jobs), which runs keyless through local agent CLIs
+  // (services/lifeos-agents). Cloudflare can't exec CLIs, so this is the
+  // only key left in the system, and it is opt-in.
+  ANTHROPIC_API_KEY?: string;
   WORKSPACE_ID?: string;
   // issue #71 - where the scheduled digest is sent; unset = no digest
   // (manual-setup-gated, same as every other deploy-time value in this

@@ -4,7 +4,8 @@ import MarkdownRenderer from './MarkdownRenderer';
 import { routeIntent, canAI } from '../lib/capabilities';
 import { apiCall } from '../lib/api';
 import { commit as vcsCommit } from '../lib/vcs';
-import { selectedAgent } from '../lib/ai';
+import { llmSelection } from '../lib/ai';
+import AgentPicker from './ui/AgentPicker';
 import { compileActionPlan } from '../lib/actionPlanCompiler';
 import ActionPlanPreview from './ActionPlanPreview';
 
@@ -75,7 +76,7 @@ export default function AIConsole() {
     const { ok, data } = await apiCall('POST', '/api/llm', {
       system: 'You are the in-app builder for Life OS. Describe the concrete change you would make, briefly.',
       prompt: `User request: ${text}\nLayers in scope: ${scope}`,
-      agent: selectedAgent(),
+      ...llmSelection(),
     });
     const plan = (ok && (data?.text || data)) ||
       `**Proposed change** (local plan - \`/api/llm\` not connected):\n\n- Target: ${scope}\n- ${text}\n\nThis is reversible: once applied it's committed to VCS, so you can time-travel back anytime.`;
@@ -127,6 +128,11 @@ export default function AIConsole() {
 
           <div className="px-4 py-2 border-b-2 border-neo-border bg-neo-surface-muted text-[11px] text-neo-text-muted flex items-center gap-1.5">
             <Lock size={11} /> AI can reshape any non-gated layer. It can never touch VCS, secrets, guardrails or billing - or delete core.
+          </div>
+
+          <div className="px-4 py-2 border-b-2 border-neo-border bg-neo-surface flex items-center justify-between gap-2">
+            <span className="text-[10px] text-neo-text-muted font-bold uppercase shrink-0">Engine</span>
+            <AgentPicker />
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">

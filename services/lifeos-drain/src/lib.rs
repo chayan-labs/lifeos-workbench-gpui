@@ -12,6 +12,8 @@
 //! same DB file), so `emit_event` is a small self-contained mirror of
 //! `lifeos_api::audit::emit` rather than a cross-crate import.
 
+pub mod ai;
+
 use async_trait::async_trait;
 use libsql::{params, Connection};
 use ulid::{Generator, Ulid};

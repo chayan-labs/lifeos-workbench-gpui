@@ -9,7 +9,9 @@ compatibility_date = "2026-07-01"
 #   BOT_TOKEN          - Telegram bot token from @BotFather
 #   TURSO_URL          - canonical DB HTTP URL (libsql://...), issue #64
 #   TURSO_TOKEN        - Turso auth token, workspace-scoped queries only
-#   ANTHROPIC_API_KEY  - Haiku key for the bot's own reasoning (issue #64)
+#   ANTHROPIC_API_KEY  - OPTIONAL Haiku key for the bot's own light reasoning
+#                        (issue #64). Unset = bot still does CRUD/recall and
+#                        enqueues AI work to the Mac's keyless agent-CLI lane.
 
 # Vars (non-secret, can live in this file):
 #   WORKSPACE_ID   - defaults to "default-personal-workspace" if unset (db.ts)

@@ -4,7 +4,7 @@ import {
   Zap, Brain, Wrench, GitMerge, Crown, CircleDot, Power
 } from 'lucide-react';
 import { apiCall } from '../lib/api';
-import { SELECTED_AGENT_KEY } from '../lib/ai';
+import { AGENT_CHANGED_EVENT, SELECTED_AGENT_KEY } from '../lib/ai';
 
 /*
  * Open design harness composer.
@@ -28,6 +28,7 @@ const AGENT_META = {
   codex: { name: 'OpenAI Codex', vendor: 'OpenAI', base: 'Tool registry + sandbox' },
   opencode: { name: 'OpenCode', vendor: 'OSS', base: 'Repo-map + tool calls' },
   hermes: { name: 'Hermes Agent', vendor: 'Local', base: 'Router + memvec recall' },
+  antigravity: { name: 'Antigravity', vendor: 'Google', base: 'Agent-first IDE harness' },
   openclaw: { name: 'OpenClaw', vendor: 'OSS', base: 'Agentic IDE harness' },
 };
 const metaFor = (id) => AGENT_META[id] || { name: id, vendor: 'Unknown', base: '-' };
@@ -72,7 +73,11 @@ export default function AgentHarness() {
 
   useEffect(() => {
     localStorage.setItem(HS, JSON.stringify(state));
-    if (state.userAgent) localStorage.setItem(SELECTED_AGENT_KEY, state.userAgent);
+    if (state.userAgent) {
+      localStorage.setItem(SELECTED_AGENT_KEY, state.userAgent);
+      // Keep every mounted AgentPicker (AI Console, ...) in sync.
+      window.dispatchEvent(new CustomEvent(AGENT_CHANGED_EVENT));
+    }
   }, [state]);
 
   const rescan = () => {

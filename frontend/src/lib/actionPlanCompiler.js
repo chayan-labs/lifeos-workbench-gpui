@@ -5,7 +5,7 @@
 // hallucinated tool can never slip through as if it were real.
 import { apiCall } from './api';
 import { ACTION_TOOLS, classifyAction } from './agentActions';
-import { selectedAgent } from './ai';
+import { llmSelection } from './ai';
 
 const TOOL_NAMES = Object.keys(ACTION_TOOLS);
 
@@ -34,7 +34,7 @@ export async function compileActionPlan(instruction, context = '') {
   const { ok, data } = await apiCall('POST', '/api/llm', {
     system: SYSTEM_PROMPT,
     prompt: context ? `Context: ${context}\nInstruction: ${instruction}` : instruction,
-    agent: selectedAgent(),
+    ...llmSelection(),
   });
 
   const raw = ok ? (data?.text || data) : null;

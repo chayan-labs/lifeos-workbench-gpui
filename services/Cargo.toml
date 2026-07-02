@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "lifeos-agents",
     "lifeos-api",
     "lifeos-vcs",
     "lifeos-ingest",

@@ -1959,6 +1959,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lifeos-agents"
+version = "1.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "lifeos-api"
 version = "1.0.0"
 dependencies = [
@@ -1974,6 +1984,7 @@ dependencies = [
  "hmac",
  "jsonwebtoken",
  "libsql",
+ "lifeos-agents",
  "lifeos-memory",
  "lifeos-pipelines",
  "lifeos-vcs",
@@ -2009,8 +2020,10 @@ name = "lifeos-drain"
 version = "1.0.0"
 dependencies = [
  "async-trait",
+ "blake3",
  "libsql",
  "lifeos-actions",
+ "lifeos-agents",
  "lifeos-ingest",
  "lifeos-memory",
  "lifeos-pipelines",

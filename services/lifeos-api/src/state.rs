@@ -51,8 +51,9 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// The default agent id (first detected in preference order), if any.
+    /// The default agent id (`LIFEOS_AGENT` if installed, else first
+    /// detected in preference order), if any.
     pub fn default_agent(&self) -> Option<String> {
-        self.agents.first().map(|a| a.id.clone())
+        crate::agents::default_agent_id(&self.agents)
     }
 }
