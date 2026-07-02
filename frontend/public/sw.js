@@ -6,7 +6,7 @@
 
 const SHELL_CACHE = 'lifeos-shell-v1';
 const API_CACHE = 'lifeos-api-v1';
-const SHELL_URLS = ['/', '/dashboard', '/manifest.webmanifest'];
+const SHELL_URLS = ['/', '/dashboard', '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

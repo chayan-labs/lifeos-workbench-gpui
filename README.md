@@ -8,6 +8,24 @@ This README is the canonical architecture document - a superset of the original 
 
 ---
 
+## 0. Quickstart
+
+```sh
+git clone <this-repo> && cd life-os
+./setup.sh    # checks Rust/Node, builds services, installs frontend deps
+./run.sh      # API on :8080 + web app on :5173 (add --with-drain for jobs)
+```
+
+Zero configuration needed: the API auto-creates and migrates a local
+`lifeos.db` on first boot, and AI runs **keyless** through whatever coding
+agent CLI is already on your PATH (Claude Code, Gemini CLI, Codex, OpenCode,
+Hermes, Antigravity, ...) - switch agent/model on the go from the AI Console.
+Every optional knob (Turso sync, Telegram bot, Nango OAuth, whisper, ...) is
+documented in `.env.example` and `docs/MANUAL-SETUP.md`.
+The web app is an installable PWA (Add to Home Screen / Install app).
+
+---
+
 ## 1. Why this exists
 
 Two problems drove it:
