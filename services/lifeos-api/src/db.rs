@@ -48,6 +48,10 @@ const MIGRATION_WORKSPACE_DATABASES: &str = include_str!("../../../migrations/00
 /// meter or bill. `DROP TABLE IF EXISTS` is naturally idempotent.
 const MIGRATION_REMOVE_BILLING: &str = include_str!("../../../migrations/0013_remove_billing.sql");
 
+/// `blob_backends` (pluggable-storage backend index, issue #106) - a new
+/// `CREATE TABLE IF NOT EXISTS`, naturally idempotent.
+const MIGRATION_BLOB_BACKENDS: &str = include_str!("../../../migrations/0014_blob_backends.sql");
+
 /// The canonical DB plus its live connection. `database` is retained by the caller
 /// so the embedded-replica's background replicator stays alive (dropping it would
 /// stop syncing) and so an explicit `database.sync()` can be triggered.
@@ -179,6 +183,7 @@ pub async fn run_migrations(conn: &Connection) -> Result<(), libsql::Error> {
     add_column_if_missing(conn, "workspaces", "envelope_key_enc", MIGRATION_WORKSPACE_ENVELOPE_KEY).await?;
     conn.execute_batch(MIGRATION_WORKSPACE_DATABASES).await?;
     conn.execute_batch(MIGRATION_REMOVE_BILLING).await?;
+    conn.execute_batch(MIGRATION_BLOB_BACKENDS).await?;
     tracing::info!("migrations applied (core + control plane)");
     Ok(())
 }
