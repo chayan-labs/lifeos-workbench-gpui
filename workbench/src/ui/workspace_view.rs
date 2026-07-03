@@ -11,7 +11,7 @@
 //! editor, agent, and Life OS views replace that content in later steps. The
 //! tiling engine, tabs, sidebar, and palette are real.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -29,6 +29,8 @@ use super::actions::{
     ToggleDock, ToggleSidebar,
 };
 use super::commands::{commands, filter, CommandId};
+use super::config::Config;
+use super::editor::EditorView;
 use super::file_tree::FileTree;
 use super::panes::{Layout, LayoutNode, PaneId, SplitDir};
 use super::terminal::TerminalView;
@@ -63,6 +65,7 @@ pub struct WorkspaceView {
     mode: Mode,
     status_hint: String,
     terminal: Entity<TerminalView>,
+    editor: Entity<EditorView>,
     layout: Layout,
     file_tree: FileTree,
     selected_file: Option<PathBuf>,
@@ -75,7 +78,9 @@ pub struct WorkspaceView {
 
 impl WorkspaceView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let config = Config::load();
         let terminal = cx.new(|cx| TerminalView::new(window, cx));
+        let editor = cx.new(|cx| EditorView::new(config.editor, window, cx));
         let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         Self {
             sidebar_open: true,
@@ -83,6 +88,7 @@ impl WorkspaceView {
             mode: Mode::Editor,
             status_hint: "ready".to_string(),
             terminal,
+            editor,
             layout: Layout::new(),
             file_tree: FileTree::open(&root),
             selected_file: None,
@@ -137,7 +143,11 @@ impl WorkspaceView {
                 };
                 self.hint(self.mode.label());
             }
-            FocusEditor => self.set_mode(Mode::Editor),
+            FocusEditor => {
+                self.set_mode(Mode::Editor);
+                let handle = self.editor.read(cx).handle(cx);
+                window.focus(&handle, cx);
+            }
             FocusTerminal => {
                 self.dock_open = true;
                 self.set_mode(Mode::Terminal);
@@ -164,6 +174,23 @@ impl WorkspaceView {
     fn set_mode(&mut self, mode: Mode) {
         self.mode = mode;
         self.status_hint = mode.label().to_lowercase();
+    }
+
+    /// Open a file: load it into the editor, switch to Editor mode, and focus
+    /// the editor. Shared by the sidebar click and (later) the fuzzy picker.
+    fn open_file(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        self.selected_file = Some(path.to_path_buf());
+        self.editor
+            .update(cx, |editor, cx| editor.open_path(path, window, cx));
+        self.mode = Mode::Editor;
+        let rel = path
+            .strip_prefix(&self.file_tree.root)
+            .unwrap_or(path)
+            .display()
+            .to_string();
+        self.hint(&format!("edit: {rel}"));
+        let handle = self.editor.read(cx).handle(cx);
+        window.focus(&handle, cx);
     }
 
     fn hint(&mut self, msg: &str) {
@@ -442,18 +469,12 @@ impl WorkspaceView {
                             .child(format!("{icon}{}", row.name()))
                             .on_mouse_down(
                                 MouseButton::Left,
-                                cx.listener(move |this, _, _, cx| {
+                                cx.listener(move |this, _, window, cx| {
                                     this.file_tree = this.file_tree.selected(i);
                                     if is_dir {
                                         this.file_tree = this.file_tree.toggled(&path);
                                     } else {
-                                        this.selected_file = Some(path.clone());
-                                        let rel = path
-                                            .strip_prefix(&this.file_tree.root)
-                                            .unwrap_or(&path)
-                                            .display()
-                                            .to_string();
-                                        this.hint(&format!("open: {rel} (editor in #24)"));
+                                        this.open_file(&path, window, cx);
                                     }
                                     cx.notify();
                                 }),
@@ -509,32 +530,40 @@ impl WorkspaceView {
         } else {
             cx.theme().border
         };
-        div()
+        let base = div()
             .id(("pane", id as usize))
-            .v_flex()
             .size_full()
-            .items_center()
-            .justify_center()
-            .gap_2()
             .border_1()
             .border_color(border)
             .bg(cx.theme().background)
-            .text_color(cx.theme().muted_foreground)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, _, cx| {
                     this.layout = this.layout.focus_pane(id);
                     cx.notify();
                 }),
-            )
-            .child(
-                div()
-                    .text_color(cx.theme().foreground)
-                    .font_semibold()
-                    .child(self.mode.label()),
-            )
-            .child(div().text_xs().child(format!("pane {id}")))
-            .into_any_element()
+            );
+
+        // The editor is a single shared surface; render it in the focused
+        // Editor-mode leaf. Other leaves show a labelled placeholder until each
+        // pane carries its own content binding (#25).
+        if self.mode == Mode::Editor && focused {
+            base.child(self.editor.clone()).into_any_element()
+        } else {
+            base.v_flex()
+                .items_center()
+                .justify_center()
+                .gap_2()
+                .text_color(cx.theme().muted_foreground)
+                .child(
+                    div()
+                        .text_color(cx.theme().foreground)
+                        .font_semibold()
+                        .child(self.mode.label()),
+                )
+                .child(div().text_xs().child(format!("pane {id}")))
+                .into_any_element()
+        }
     }
 
     /// The bottom terminal dock: a header strip over the live terminal view.

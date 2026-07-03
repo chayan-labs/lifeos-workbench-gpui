@@ -9,6 +9,8 @@
 pub mod actions;
 pub mod app;
 pub mod commands;
+pub mod config;
+pub mod editor;
 pub mod file_tree;
 pub mod menu;
 pub mod panes;
