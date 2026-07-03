@@ -27,6 +27,16 @@ actions!(
         NewTab,
         /// Close the active tab.
         CloseTab,
+        /// Split the focused pane to the right.
+        SplitRight,
+        /// Split the focused pane downward.
+        SplitDown,
+        /// Close the focused pane.
+        ClosePane,
+        /// Focus the next pane in the active tab.
+        FocusNextPane,
+        /// Focus the previous pane in the active tab.
+        FocusPrevPane,
         /// Focus the editor surface in the center.
         FocusEditor,
         /// Focus the integrated terminal.
@@ -52,6 +62,11 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-j", ToggleDock, None),
         KeyBinding::new("cmd-t", NewTab, None),
         KeyBinding::new("cmd-w", CloseTab, None),
+        KeyBinding::new("cmd-\\", SplitRight, None),
+        KeyBinding::new("cmd-shift-\\", SplitDown, None),
+        KeyBinding::new("cmd-shift-w", ClosePane, None),
+        KeyBinding::new("cmd-]", FocusNextPane, None),
+        KeyBinding::new("cmd-[", FocusPrevPane, None),
         KeyBinding::new("cmd-1", FocusEditor, None),
         KeyBinding::new("cmd-2", FocusTerminal, None),
         KeyBinding::new("cmd-3", FocusAgent, None),

@@ -8,8 +8,9 @@
 use gpui::{App, Menu, MenuItem};
 
 use super::actions::{
-    About, CloseTab, CommandPalette, FocusAgent, FocusEditor, FocusTerminal, NewTab, OpenFile,
-    OpenLifeOs, OpenRecall, Quit, ToggleDock, ToggleSidebar,
+    About, CloseTab, ClosePane, CommandPalette, FocusAgent, FocusEditor, FocusNextPane,
+    FocusPrevPane, FocusTerminal, NewTab, OpenFile, OpenLifeOs, OpenRecall, Quit, SplitDown,
+    SplitRight, ToggleDock, ToggleSidebar,
 };
 
 /// Install the application menu bar.
@@ -45,6 +46,18 @@ fn build() -> Vec<Menu> {
                 MenuItem::separator(),
                 MenuItem::action("Toggle Sidebar", ToggleSidebar),
                 MenuItem::action("Toggle Terminal Dock", ToggleDock),
+            ],
+            disabled: false,
+        },
+        Menu {
+            name: "Pane".into(),
+            items: vec![
+                MenuItem::action("Split Right", SplitRight),
+                MenuItem::action("Split Down", SplitDown),
+                MenuItem::separator(),
+                MenuItem::action("Focus Next", FocusNextPane),
+                MenuItem::action("Focus Previous", FocusPrevPane),
+                MenuItem::action("Close Pane", ClosePane),
             ],
             disabled: false,
         },

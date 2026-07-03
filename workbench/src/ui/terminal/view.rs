@@ -59,7 +59,7 @@ impl TerminalView {
                 .timer(Duration::from_millis(TICK_MS))
                 .await;
             if let Some(this) = this.upgrade() {
-                let _ = this.update(cx, |this, cx| this.on_tick(cx));
+                this.update(cx, |this, cx| this.on_tick(cx));
             }
         });
     }
