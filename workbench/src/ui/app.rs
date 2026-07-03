@@ -12,10 +12,12 @@
 // Glob import brings the `AppContext` trait (providing `cx.new(..)`) and the
 // other context traits into scope, matching gpui-component's examples.
 use gpui::*;
-use gpui_component::Root;
+use gpui_component::{Root, Theme, ThemeMode, TitleBar};
 use std::sync::OnceLock;
 use tokio::runtime::{Handle, Runtime};
 
+use super::actions::{self, Quit};
+use super::menu;
 use super::workspace_view::WorkspaceView;
 
 /// The process-wide tokio runtime backing every async surface. Kept alive for
@@ -41,10 +43,21 @@ pub fn run() {
     gpui_platform::application().run(move |cx| {
         // Must precede any gpui-component use.
         gpui_component::init(cx);
+        // Zed-adjacent dark default (overridable via Lua config in #26).
+        Theme::change(ThemeMode::Dark, None, cx);
+
+        // Commands: keymap + app-global handlers + the native menu bar.
+        actions::bind_keys(cx);
+        cx.on_action(|_: &Quit, cx| cx.quit());
+        menu::install(cx);
+        cx.activate(true);
 
         let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
+            // Custom in-window title bar (hides the native one) so the menu +
+            // tab strip live in the chrome, Zed-style.
+            titlebar: Some(TitleBar::title_bar_options()),
             ..Default::default()
         };
 

@@ -6,7 +6,9 @@
 //! shared logic core (command registry, layout, manifests, view-model
 //! builders) is consumed by the views here; nothing gpui leaks back into it.
 
+pub mod actions;
 pub mod app;
+pub mod menu;
 pub mod workspace_view;
 
 pub use app::run;
