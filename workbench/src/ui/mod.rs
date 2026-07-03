@@ -14,6 +14,7 @@ pub mod commands;
 pub mod config;
 pub mod editor;
 pub mod file_tree;
+pub mod import;
 pub mod lifeos;
 pub mod menu;
 pub mod panes;

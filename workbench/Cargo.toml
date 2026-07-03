@@ -75,6 +75,10 @@ gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "
 alacritty_terminal = "0.24"
 portable-pty = "0.8"
 
+# Lua configuration (mlua, vendored Lua 5.4). Loads the user's config.lua and
+# parses WezTerm's own Lua config directly for first-launch import.
+mlua = { version = "0.9", features = ["lua54", "vendored"] }
+
 # The editor (#24) uses gpui-component's native code editor, whose tree-sitter
 # 0.26 highlighting is enabled via the language features above - no standalone
 # grammar crates, so no `links` collision. helix-core stays absent for now: it

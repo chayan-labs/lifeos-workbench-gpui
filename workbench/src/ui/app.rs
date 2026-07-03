@@ -17,6 +17,7 @@ use std::sync::OnceLock;
 use tokio::runtime::{Handle, Runtime};
 
 use super::actions::{self, Quit};
+use super::config::{self, Config, ThemePref};
 use super::menu;
 use super::workspace_view::WorkspaceView;
 
@@ -43,8 +44,14 @@ pub fn run() {
     gpui_platform::application().run(move |cx| {
         // Must precede any gpui-component use.
         gpui_component::init(cx);
-        // Zed-adjacent dark default (overridable via Lua config in #26).
-        Theme::change(ThemeMode::Dark, None, cx);
+
+        // First launch: seed a config.lua from the user's VS Code / WezTerm
+        // settings if we have not written one yet. Then resolve config (defaults
+        // -> config.lua -> env) and apply the visual parts (theme mode + fonts).
+        if let Some(dir) = config::config_dir() {
+            super::import::run_first_launch_import(&dir);
+        }
+        apply_config(&Config::load(), cx);
 
         // Commands: keymap + app-global handlers + the native menu bar.
         actions::bind_keys(cx);
@@ -67,4 +74,29 @@ pub fn run() {
         })
         .expect("open main window");
     });
+}
+
+/// Apply the visual parts of the resolved config: theme mode, then any font
+/// overrides on top of the mode's theme. Editor engine/options are consumed
+/// separately by the editor view.
+fn apply_config(config: &Config, cx: &mut App) {
+    let mode = match config.theme {
+        ThemePref::Dark => ThemeMode::Dark,
+        ThemePref::Light => ThemeMode::Light,
+    };
+    Theme::change(mode, None, cx);
+
+    let theme = Theme::global_mut(cx);
+    if let Some(f) = &config.font.ui_family {
+        theme.font_family = f.clone().into();
+    }
+    if let Some(f) = &config.font.mono_family {
+        theme.mono_font_family = f.clone().into();
+    }
+    if let Some(s) = config.font.ui_size {
+        theme.font_size = px(s);
+    }
+    if let Some(s) = config.font.mono_size {
+        theme.mono_font_size = px(s);
+    }
 }
