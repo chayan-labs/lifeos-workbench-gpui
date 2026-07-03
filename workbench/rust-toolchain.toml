@@ -1,0 +1,6 @@
+# gpui (Zed) requires Rust 1.95 for stabilised APIs such as `std::hint::cold_path`.
+# Pin the same stable channel Zed builds against so the gpui frontend compiles.
+[toolchain]
+channel = "1.95.0"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

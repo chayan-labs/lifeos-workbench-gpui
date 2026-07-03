@@ -1,3 +1,6 @@
+//! (legacy-tui only) Ported into the gpui `ui` frontend; see CLAUDE.md.
+#![cfg(feature = "legacy-tui")]
+
 //! Issues #10-#12 end-to-end: real manifests drive the renderer dispatch
 //! over real entities served by lifeos-api in-process, and a board card
 //! move persists through the same API.
