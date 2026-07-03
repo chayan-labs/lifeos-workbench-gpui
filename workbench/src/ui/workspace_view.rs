@@ -22,6 +22,8 @@ use super::actions::{
     CommandPalette, FocusAgent, FocusEditor, FocusTerminal, OpenLifeOs, OpenRecall, ToggleDock,
     ToggleSidebar,
 };
+use super::terminal::TerminalView;
+use gpui::{AppContext, Entity};
 
 /// Which surface the center currently shows. Real content arrives per mode in
 /// later steps; for now each renders a labelled placeholder.
@@ -52,15 +54,18 @@ pub struct WorkspaceView {
     dock_open: bool,
     mode: Mode,
     status_hint: String,
+    terminal: Entity<TerminalView>,
 }
 
 impl WorkspaceView {
-    pub fn new(_window: &mut Window, _cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let terminal = cx.new(|cx| TerminalView::new(window, cx));
         Self {
             sidebar_open: true,
             dock_open: true,
             mode: Mode::Editor,
             status_hint: "ready".to_string(),
+            terminal,
         }
     }
 
@@ -81,9 +86,11 @@ impl WorkspaceView {
     fn focus_editor(&mut self, _: &FocusEditor, _: &mut Window, cx: &mut Context<Self>) {
         self.set_mode(Mode::Editor, cx);
     }
-    fn focus_terminal(&mut self, _: &FocusTerminal, _: &mut Window, cx: &mut Context<Self>) {
+    fn focus_terminal(&mut self, _: &FocusTerminal, window: &mut Window, cx: &mut Context<Self>) {
         self.dock_open = true;
         self.set_mode(Mode::Terminal, cx);
+        let handle = self.terminal.read(cx).handle();
+        window.focus(&handle, cx);
     }
     fn focus_agent(&mut self, _: &FocusAgent, _: &mut Window, cx: &mut Context<Self>) {
         self.set_mode(Mode::Agent, cx);
@@ -188,18 +195,23 @@ impl WorkspaceView {
             .child("surface renders here")
     }
 
-    /// The bottom terminal dock (placeholder for now; real terminal in #22).
+    /// The bottom terminal dock: a header strip over the live terminal view.
     fn dock(&self, cx: &Context<Self>) -> impl IntoElement {
         div()
             .v_flex()
             .size_full()
-            .p_3()
-            .bg(cx.theme().secondary)
             .border_t_1()
             .border_color(cx.theme().border)
-            .text_color(cx.theme().muted_foreground)
-            .child(div().text_xs().child("TERMINAL"))
-            .child("shell mounts here")
+            .child(
+                div()
+                    .px_3()
+                    .py_1()
+                    .text_xs()
+                    .bg(cx.theme().secondary)
+                    .text_color(cx.theme().muted_foreground)
+                    .child("TERMINAL"),
+            )
+            .child(div().flex_1().min_h_0().child(self.terminal.clone()))
     }
 
     /// The center column: surface over an optional resizable terminal dock.

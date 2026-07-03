@@ -9,6 +9,7 @@
 pub mod actions;
 pub mod app;
 pub mod menu;
+pub mod terminal;
 pub mod workspace_view;
 
 pub use app::run;
