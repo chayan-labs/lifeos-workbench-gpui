@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = [
+    "lifeos-agents",
+    "lifeos-api",
+    "lifeos-vcs",
+    "lifeos-ingest",
+    "lifeos-pipelines",
+    "lifeos-actions",
+    "lifeos-memory",
+    "lifeos-drain",
+    "lifeos-cli"
+]

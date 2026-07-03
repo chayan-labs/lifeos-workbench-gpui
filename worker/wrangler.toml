@@ -1,0 +1,27 @@
+# Cloudflare Worker: Telegram bot (issue #63; docs/ARCHITECTURE.md §3.1).
+# Deploy with `wrangler deploy` from this directory (needs `wrangler login` /
+# CLOUDFLARE_API_TOKEN once - manual, one-time, see docs/MANUAL-SETUP.md).
+name = "lifeos-bot"
+main = "src/index.ts"
+compatibility_date = "2026-07-01"
+
+# Secrets (never committed - set via `wrangler secret put <NAME>`):
+#   BOT_TOKEN          - Telegram bot token from @BotFather
+#   TURSO_URL          - canonical DB HTTP URL (libsql://...), issue #64
+#   TURSO_TOKEN        - Turso auth token, workspace-scoped queries only
+#   ANTHROPIC_API_KEY  - OPTIONAL Haiku key for the bot's own light reasoning
+#                        (issue #64). Unset = bot still does CRUD/recall and
+#                        enqueues AI work to the Mac's keyless agent-CLI lane.
+
+# Vars (non-secret, can live in this file):
+#   WORKSPACE_ID   - defaults to "default-personal-workspace" if unset (db.ts)
+#   DIGEST_CHAT_ID - Telegram chat id the daily digest is sent to (issue #71);
+#                    unset = no digest. Get it by messaging the bot once and
+#                    reading `message.chat.id`, or ask @userinfobot.
+[vars]
+# WORKSPACE_ID = "default-personal-workspace"
+# DIGEST_CHAT_ID = "123456789"
+
+# Daily digest cron trigger (issue #71) - 08:00 UTC; edit to taste.
+[triggers]
+crons = ["0 8 * * *"]

@@ -1,0 +1,369 @@
+@import url("https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@500;700;800&family=JetBrains+Mono:wght@700&family=Montserrat:wght@800;900&display=swap");
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+/* The theme toggle adds `.dark` on <html>; bind Tailwind's dark: variant to it
+   (v4 defaults dark: to prefers-color-scheme, which ignores the class). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Register the neo palette as Tailwind color tokens so `bg-neo-*`, `text-neo-*`,
+   `border-neo-*` utilities generate. `@theme inline` emits the utility as
+   `var(--neo-*)` (not the resolved value), so the `:root.dark` overrides below
+   keep working at runtime. Without this block these utilities are no-ops and
+   every colored button/badge/nav-highlight renders unstyled. */
+@theme inline {
+	--color-neo-bg: var(--neo-bg);
+	--color-neo-surface: var(--neo-surface);
+	--color-neo-surface-muted: var(--neo-surface-muted);
+	--color-neo-surface-high: var(--neo-surface-high);
+	--color-neo-surface-variant: var(--neo-surface-variant);
+	--color-neo-text: var(--neo-text);
+	--color-neo-text-muted: var(--neo-text-muted);
+	--color-neo-border: var(--neo-border);
+	--color-neo-yellow: var(--neo-yellow);
+	--color-neo-blue: var(--neo-blue);
+	--color-neo-blue-bright: var(--neo-blue-bright);
+	--color-neo-red: var(--neo-red);
+	--color-neo-mint: var(--neo-mint);
+}
+
+/* Bind prose (markdown) colors to the neo theme tokens so rendered articles
+   stay readable in both light and dark mode. */
+.prose {
+	--tw-prose-body: var(--neo-text);
+	--tw-prose-headings: var(--neo-text);
+	--tw-prose-bold: var(--neo-text);
+	--tw-prose-links: var(--neo-blue);
+	--tw-prose-quotes: var(--neo-text-muted);
+	--tw-prose-code: var(--neo-text);
+	--tw-prose-bullets: var(--neo-text-muted);
+	--tw-prose-counters: var(--neo-text-muted);
+	--tw-prose-hr: var(--neo-border);
+	--tw-prose-th-borders: var(--neo-border);
+	--tw-prose-td-borders: var(--neo-border);
+}
+
+:root {
+	--neo-bg: #fdfae4;
+	--neo-surface: #ffffff;
+	--neo-surface-muted: #f7f4df;
+	--neo-surface-high: #ece9d3;
+	--neo-surface-variant: #e6e3ce;
+	--neo-text: #1c1c0f;
+	--neo-text-muted: #484831;
+	--neo-border: #1c1c0f;
+	--neo-yellow: #ffff00;
+	--neo-blue: #2f29e8;
+	--neo-blue-bright: #4b4cff;
+	--neo-red: #ff4b4b;
+	--neo-mint: #00ff9d;
+	--neo-shadow: 4px 4px 0 0 #1c1c0f;
+	--neo-shadow-lg: 8px 8px 0 0 #1c1c0f;
+	--neo-shadow-xl: 12px 12px 0 0 #1c1c0f;
+}
+
+:root.dark {
+	--neo-bg: #000000;
+	--neo-surface: #0a0a0a;
+	--neo-surface-muted: #141414;
+	--neo-surface-high: #1f1f1f;
+	--neo-surface-variant: #292929;
+	--neo-text: #ededed;
+	--neo-text-muted: #a3a3a3;
+	--neo-border: #333333;
+	--neo-yellow: #facc15;
+	--neo-blue: #2f5cff;
+	--neo-blue-bright: #5b8bff;
+	--neo-red: #ff5252;
+	--neo-mint: #34d399;
+	--neo-shadow: 4px 4px 0 0 #333333;
+	--neo-shadow-lg: 8px 8px 0 0 #333333;
+	--neo-shadow-xl: 12px 12px 0 0 #333333;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+body {
+	margin: 0;
+	background: var(--neo-bg);
+	color: var(--neo-text);
+	font-family: "Hanken Grotesk", system-ui, -apple-system, sans-serif;
+}
+
+::selection {
+	background: var(--neo-yellow);
+	color: var(--neo-text);
+}
+
+@layer components {
+.neo-bg {
+	background: var(--neo-bg);
+}
+
+.neo-surface {
+	background: var(--neo-surface);
+}
+
+.neo-surface-muted {
+	background: var(--neo-surface-muted);
+}
+
+.neo-surface-high {
+	background: var(--neo-surface-high);
+}
+
+.neo-border {
+	border: 2px solid var(--neo-border);
+}
+
+.neo-border-thick {
+	border: 4px solid var(--neo-border);
+}
+
+.neo-border-dashed {
+	border-style: dashed;
+}
+
+.neo-shadow {
+	box-shadow: var(--neo-shadow);
+}
+
+.neo-shadow-lg {
+	box-shadow: var(--neo-shadow-lg);
+}
+
+.neo-shadow-xl {
+	box-shadow: var(--neo-shadow-xl);
+}
+
+.neo-shadow-hover:hover {
+	box-shadow: var(--neo-shadow-lg);
+	transform: translate(-4px, -4px);
+}
+
+.neo-shadow-press:active {
+	box-shadow: 0 0 0 0 var(--neo-border);
+	transform: translate(4px, 4px);
+}
+
+.neo-radius {
+	border-radius: 4px;
+}
+
+.neo-radius-none {
+	border-radius: 0;
+}
+
+.neo-title-xl {
+	font-family: "Montserrat", system-ui, -apple-system, sans-serif;
+	font-size: clamp(28px, 4vw, 48px);
+	font-weight: 900;
+	line-height: 1.1;
+	letter-spacing: -0.02em;
+	text-transform: uppercase;
+}
+
+.neo-title-lg {
+	font-family: "Montserrat", system-ui, -apple-system, sans-serif;
+	font-size: clamp(24px, 3.2vw, 32px);
+	font-weight: 800;
+	line-height: 1.2;
+	text-transform: uppercase;
+}
+
+.neo-title-md {
+	font-family: "Montserrat", system-ui, -apple-system, sans-serif;
+	font-size: clamp(20px, 2.6vw, 24px);
+	font-weight: 800;
+	line-height: 1.2;
+	text-transform: uppercase;
+}
+
+.neo-body-lg {
+	font-size: 18px;
+	line-height: 1.5;
+	font-weight: 500;
+}
+
+.neo-body-md {
+	font-size: 16px;
+	line-height: 1.5;
+	font-weight: 500;
+}
+
+.neo-label-md {
+	font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+	font-size: 14px;
+	line-height: 1.2;
+	font-weight: 700;
+	text-transform: uppercase;
+}
+
+.neo-label-sm {
+	font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+	font-size: 12px;
+	line-height: 1.2;
+	font-weight: 700;
+	text-transform: uppercase;
+}
+
+.neo-input {
+	background: var(--neo-surface);
+	border: 2px solid var(--neo-border);
+	padding: 0.6rem 0.75rem;
+	font-size: 16px;
+	font-family: "Hanken Grotesk", system-ui, -apple-system, sans-serif;
+	color: var(--neo-text);
+}
+
+.neo-input:focus {
+	outline: none;
+	border-width: 4px;
+	border-color: var(--neo-blue);
+	box-shadow: var(--neo-shadow);
+}
+
+.neo-btn {
+	border: 2px solid var(--neo-border);
+	background: var(--neo-surface);
+	color: var(--neo-text);
+	font-family: "Montserrat", system-ui, -apple-system, sans-serif;
+	font-weight: 800;
+	text-transform: uppercase;
+	letter-spacing: 0.02em;
+	box-shadow: var(--neo-shadow);
+	transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+	cursor: pointer;
+}
+
+.neo-btn:hover {
+	box-shadow: var(--neo-shadow-lg);
+	transform: translate(-4px, -4px);
+}
+
+.neo-btn:active {
+	box-shadow: 0 0 0 0 var(--neo-border);
+	transform: translate(4px, 4px);
+}
+
+.neo-btn-primary {
+	background: var(--neo-yellow);
+}
+
+.neo-btn-secondary {
+	background: var(--neo-blue);
+	color: #ffffff;
+}
+
+.neo-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.35rem;
+	padding: 0.2rem 0.5rem;
+	border: 2px solid var(--neo-border);
+	font-size: 12px;
+	font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+	text-transform: uppercase;
+	font-weight: 700;
+}
+
+.neo-chip--draft {
+	background: #ffffff;
+	color: var(--neo-text);
+}
+
+.neo-chip--review {
+	background: var(--neo-yellow);
+	color: var(--neo-text);
+}
+
+.neo-chip--completed {
+	background: var(--neo-mint);
+	color: var(--neo-text);
+}
+
+.neo-chip--overdue {
+	background: var(--neo-red);
+	color: #ffffff;
+}
+
+.neo-chip--active {
+	background: var(--neo-blue);
+	color: #ffffff;
+}
+
+.neo-tag {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.25rem;
+	padding: 0.15rem 0.4rem;
+	border: 2px solid var(--neo-border);
+	font-size: 11px;
+	font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+	text-transform: uppercase;
+	background: var(--neo-surface-muted);
+}
+
+.neo-icon-btn {
+	border: 2px solid var(--neo-border);
+	background: var(--neo-surface-high);
+	box-shadow: var(--neo-shadow);
+	transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+	cursor: pointer;
+}
+
+.neo-icon-btn:hover {
+	background: var(--neo-yellow);
+	box-shadow: var(--neo-shadow-lg);
+	transform: translate(-2px, -2px);
+}
+
+.neo-divider {
+	border-bottom: 4px solid var(--neo-border);
+}
+
+/* Rotating Globe Logo Animation */
+@keyframes spin-slow {
+	0% {
+		transform: rotate(0deg);
+	}
+	100% {
+		transform: rotate(360deg);
+	}
+}
+
+@keyframes pulse-dash {
+	0%, 100% {
+		stroke-dashoffset: 0;
+	}
+	50% {
+		stroke-dashoffset: 20;
+	}
+}
+
+.animate-spin-slow {
+	animation: spin-slow 20s linear infinite;
+}
+
+.animate-pulse-dash {
+	animation: pulse-dash 4s ease-in-out infinite;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+	width: 12px;
+}
+::-webkit-scrollbar-track {
+	background: var(--neo-bg);
+	border-left: 2px solid var(--neo-border);
+}
+::-webkit-scrollbar-thumb {
+	background: var(--neo-surface-high);
+	border: 2px solid var(--neo-border);
+}
+::-webkit-scrollbar-thumb:hover {
+	background: var(--neo-yellow);
+}
+}

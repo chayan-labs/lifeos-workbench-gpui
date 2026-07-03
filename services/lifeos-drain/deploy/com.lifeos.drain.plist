@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent for lifeos-drain (the Mac-side heavy-job consumer).
+
+  Install:
+    1. Edit the absolute paths below (binary, WorkingDirectory, LIFEOS_DB_PATH).
+    2. cp this file to ~/Library/LaunchAgents/com.lifeos.drain.plist
+    3. launchctl load -w ~/Library/LaunchAgents/com.lifeos.drain.plist
+  Logs land in ~/Library/Logs/lifeos-drain.{out,err}.log.
+  Uninstall: launchctl unload -w ~/Library/LaunchAgents/com.lifeos.drain.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.lifeos.drain</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/USERNAME/Desktop/SecondBrain/04_Projects/life-os/services/target/release/lifeos-drain</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/USERNAME/Desktop/SecondBrain/04_Projects/life-os/services</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>LIFEOS_DB_PATH</key>
+        <string>/Users/USERNAME/Desktop/SecondBrain/04_Projects/life-os/services/lifeos.db</string>
+        <key>LIFEOS_DRAIN_POLL_SECS</key>
+        <string>3</string>
+        <key>LIFEOS_DRAIN_STUCK_TTL_SECS</key>
+        <string>300</string>
+        <key>LIFEOS_DRAIN_MAX_ATTEMPTS</key>
+        <string>3</string>
+    </dict>
+
+    <!-- Run at login and keep the drainer alive; relaunch if it crashes. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <!-- Back off relaunches so a hard-failing binary doesn't spin. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/USERNAME/Library/Logs/lifeos-drain.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/USERNAME/Library/Logs/lifeos-drain.err.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "osRegisterModule manifest",
+  "description": "Validator 1 (docs/SELF-EXTENSION.md §4) - the object passed to osRegisterModule({...}) in a module's module.js.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["id", "name", "icon", "color", "entityTypes", "views"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "name": { "type": "string", "minLength": 1 },
+    "icon": { "type": "string", "minLength": 1 },
+    "color": { "type": "string", "minLength": 1 },
+    "num": { "type": "number" },
+    "version": { "type": "string" },
+    "entityTypes": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/entityType" }
+    },
+    "views": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/view" }
+    },
+    "metrics": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/metric" }
+    },
+    "events": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "botCommands": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/botCommand" }
+    },
+    "agentTools": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/agentTool" }
+    },
+    "integrations": {
+      "type": "array"
+    }
+  },
+  "$defs": {
+    "attr": {
+      "type": "object",
+      "required": ["type", "required"],
+      "properties": {
+        "type": { "enum": ["text", "number", "boolean", "date", "select", "enum", "json", "blob", "file"] },
+        "required": { "type": "boolean" },
+        "enum": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "entityType": {
+      "type": "object",
+      "required": ["label", "plural", "icon", "attrs"],
+      "properties": {
+        "label": { "type": "string", "minLength": 1 },
+        "plural": { "type": "string", "minLength": 1 },
+        "icon": { "type": "string", "minLength": 1 },
+        "attrs": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/attr" }
+        },
+        "display": {
+          "type": "object",
+          "properties": {
+            "title": { "type": "string" },
+            "subtitle": { "type": "string" },
+            "badge": { "type": "string" }
+          }
+        },
+        "lifecycle": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "view": {
+      "type": "object",
+      "required": ["id", "label", "kind"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["list", "table", "board", "calendar", "gallery", "timeline", "map", "metric"] },
+        "type": { "type": "string" },
+        "metric": { "type": "string" },
+        "sortBy": { "type": "string" },
+        "groupBy": { "type": "string" },
+        "dateField": { "type": "string" },
+        "columns": { "type": "array" },
+        "filter": { "type": ["string", "object"] }
+      }
+    },
+    "metric": {
+      "type": "object",
+      "required": ["id", "label"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 }
+      }
+    },
+    "botCommand": {
+      "type": "object",
+      "required": ["cmd", "help", "handler"],
+      "properties": {
+        "cmd": { "type": "string", "minLength": 1 },
+        "help": { "type": "string", "minLength": 1 },
+        "handler": { "type": "string", "minLength": 1 }
+      }
+    },
+    "agentTool": {
+      "type": "object",
+      "required": ["name", "impl"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "schema": { "type": "object" },
+        "impl": { "type": "string", "minLength": 1 },
+        "gated": { "type": "boolean" }
+      }
+    }
+  }
+}

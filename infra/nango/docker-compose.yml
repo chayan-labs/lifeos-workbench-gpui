@@ -1,0 +1,61 @@
+## Self-hosted Nango: the OAuth vault + proxy for the owned-credential model
+## (docs/INTEGRATIONS.md). Free-self-hosting edition (auth + proxy only, no
+## Syncs/Functions - see docs/LICENSING-REUSE.md). Runs on the trusted Mac.
+##
+## Usage: cp .env.example .env, fill it in, then `docker compose up -d`.
+
+services:
+  nango-db:
+    image: postgres:16.0-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${NANGO_DB_USER:-nango}
+      POSTGRES_PASSWORD: ${NANGO_DB_PASSWORD}
+      POSTGRES_DB: ${NANGO_DB_NAME:-nango}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${NANGO_DB_PORT:-5435}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${NANGO_DB_USER:-nango}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  nango-redis:
+    image: redis:7.2.4
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${NANGO_REDIS_PORT:-6381}:6379"
+
+  nango-server:
+    image: nangohq/nango-server:hosted
+    restart: unless-stopped
+    depends_on:
+      nango-db:
+        condition: service_healthy
+      nango-redis:
+        condition: service_started
+    environment:
+      NANGO_DB_HOST: nango-db
+      NANGO_DB_PORT: 5432
+      NANGO_DB_USER: ${NANGO_DB_USER:-nango}
+      NANGO_DB_PASSWORD: ${NANGO_DB_PASSWORD}
+      NANGO_DB_NAME: ${NANGO_DB_NAME:-nango}
+      NANGO_REDIS_URL: redis://nango-redis:6379
+      # Immutable once real connections exist - generate once, store safely,
+      # never rotate casually (docs/MANUAL-SETUP.md).
+      NANGO_ENCRYPTION_KEY: ${NANGO_ENCRYPTION_KEY}
+      NANGO_SECRET_KEY_DEV: ${NANGO_SECRET_KEY_DEV}
+      NANGO_SECRET_KEY_PROD: ${NANGO_SECRET_KEY_PROD:-${NANGO_SECRET_KEY_DEV}}
+      NANGO_SERVER_URL: ${NANGO_SERVER_URL:-http://localhost:3003}
+      NANGO_PUBLIC_SERVER_URL: ${NANGO_SERVER_URL:-http://localhost:3003}
+      NANGO_DASHBOARD_USERNAME: ${NANGO_DASHBOARD_USERNAME}
+      NANGO_DASHBOARD_PASSWORD: ${NANGO_DASHBOARD_PASSWORD}
+      SERVER_PORT: 3003
+      CONNECT_UI_PORT: 3009
+      LOG_LEVEL: info
+      NANGO_LOGS_ENABLED: "false"
+    ports:
+      - "127.0.0.1:3003:3003"
+      - "127.0.0.1:3009:3009"

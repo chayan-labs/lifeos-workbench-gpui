@@ -1,0 +1,29 @@
+## Self-hosted GOWA (github.com/aldinokemal/go-whatsapp-web-multidevice): a
+## REST wrapper around whatsmeow with a real multi-tenant device API and a
+## static, server-configured webhook - see docs/INTEGRATIONS.md. No Meta app,
+## no OAuth; devices pair by scanning a QR like WhatsApp Web.
+##
+## Usage: cp .env.example .env, fill it in, then `docker compose up -d`.
+## Verify the image tag below still exists on Docker Hub before first run -
+## https://hub.docker.com/r/aldinokemal2104/go-whatsapp-web-multidevice/tags -
+## bump it to match the repo's current release if not.
+##
+## ToS note (from GOWA's own README): this drives a real WhatsApp account
+## over its consumer protocol. Do not use it for spam/bulk/automated
+## messages - that risks WhatsApp banning the number. See docs/MANUAL-SETUP.md #52.
+
+services:
+  gowa:
+    image: aldinokemal2104/go-whatsapp-web-multidevice:v8.9.0
+    restart: unless-stopped
+    environment:
+      APP_OS: lifeos
+      APP_BASIC_AUTH: ${GOWA_BASIC_AUTH}
+      WHATSAPP_WEBHOOK: ${WHATSAPP_WEBHOOK:-}
+      WHATSAPP_WEBHOOK_SECRET: ${GOWA_WEBHOOK_SECRET}
+      # Only forward events lifeos-api actually acts on.
+      WHATSAPP_WEBHOOK_EVENTS: message
+    volumes:
+      - ./storages:/app/storages
+    ports:
+      - "127.0.0.1:${GOWA_PORT:-8082}:3000"
