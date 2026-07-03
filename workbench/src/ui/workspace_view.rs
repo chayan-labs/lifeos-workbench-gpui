@@ -24,15 +24,19 @@ use gpui_component::status_bar::StatusBar;
 use gpui_component::{ActiveTheme, Sizable, StyledExt, TitleBar};
 
 use super::actions::{
-    About, CloseTab, ClosePane, CommandPalette, FocusAgent, FocusEditor, FocusNextPane,
+    About, ClosePane, CloseTab, CommandPalette, FocusAgent, FocusEditor, FocusNextPane,
     FocusPrevPane, FocusTerminal, NewTab, OpenFile, OpenLifeOs, OpenRecall, SplitDown, SplitRight,
     ToggleDock, ToggleSidebar,
 };
+use super::agent::AgentView;
+use super::api_host::ApiHost;
 use super::commands::{commands, filter, CommandId};
 use super::config::Config;
 use super::editor::EditorView;
 use super::file_tree::FileTree;
+use super::lifeos::LifeOsView;
 use super::panes::{Layout, LayoutNode, PaneId, SplitDir};
+use super::recall::RecallView;
 use super::terminal::TerminalView;
 
 /// Which surface a pane currently shows. Real content arrives per mode in later
@@ -56,6 +60,23 @@ impl Mode {
             Mode::Recall => "Recall",
         }
     }
+
+    /// The startup pane, overridable via `WB_START_MODE` (editor by default).
+    /// Handy for opening straight into a pane for screenshots / E2E without
+    /// driving the menu.
+    fn from_env() -> Self {
+        match std::env::var("WB_START_MODE")
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "terminal" | "term" => Mode::Terminal,
+            "agent" => Mode::Agent,
+            "lifeos" | "life-os" | "os" => Mode::LifeOs,
+            "recall" | "search" => Mode::Recall,
+            _ => Mode::Editor,
+        }
+    }
 }
 
 /// The root view installed under `gpui_component::Root`.
@@ -66,6 +87,9 @@ pub struct WorkspaceView {
     status_hint: String,
     terminal: Entity<TerminalView>,
     editor: Entity<EditorView>,
+    lifeos: Entity<LifeOsView>,
+    agent: Entity<AgentView>,
+    recall: Entity<RecallView>,
     layout: Layout,
     file_tree: FileTree,
     selected_file: Option<PathBuf>,
@@ -79,16 +103,27 @@ pub struct WorkspaceView {
 impl WorkspaceView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let config = Config::load();
+        // Stand up the in-process lifeos-api once; the Life OS and Recall panes
+        // share the handle and read whatever state the bootstrap has reached.
+        let api = ApiHost::new();
+        api.bootstrap(&super::app::tokio_handle());
         let terminal = cx.new(|cx| TerminalView::new(window, cx));
         let editor = cx.new(|cx| EditorView::new(config.editor, window, cx));
+        let lifeos = cx.new(|cx| LifeOsView::new(api.clone(), window, cx));
+        let agent = cx.new(|cx| AgentView::new(window, cx));
+        let recall = cx.new(|cx| RecallView::new(api.clone(), window, cx));
         let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let mode = Mode::from_env();
         Self {
             sidebar_open: true,
             dock_open: true,
-            mode: Mode::Editor,
+            mode,
             status_hint: "ready".to_string(),
             terminal,
             editor,
+            lifeos,
+            agent,
+            recall,
             layout: Layout::new(),
             file_tree: FileTree::open(&root),
             selected_file: None,
@@ -163,9 +198,21 @@ impl WorkspaceView {
                 self.hint(&format!("terminal dock {}", shown(self.dock_open)));
             }
             OpenFilePicker => self.hint("fuzzy picker (todo)"),
-            OpenAgentPane => self.set_mode(Mode::Agent),
-            OpenSearchPane => self.set_mode(Mode::Recall),
-            OpenLifeOsPane => self.set_mode(Mode::LifeOs),
+            OpenAgentPane => {
+                self.set_mode(Mode::Agent);
+                let handle = self.agent.read(cx).handle();
+                window.focus(&handle, cx);
+            }
+            OpenSearchPane => {
+                self.set_mode(Mode::Recall);
+                let handle = self.recall.read(cx).handle();
+                window.focus(&handle, cx);
+            }
+            OpenLifeOsPane => {
+                self.set_mode(Mode::LifeOs);
+                let handle = self.lifeos.read(cx).handle();
+                window.focus(&handle, cx);
+            }
             Quit => window.dispatch_action(Box::new(super::actions::Quit), cx),
         }
         cx.notify();
@@ -251,7 +298,12 @@ impl WorkspaceView {
 
     // ---- command palette ----
 
-    fn on_command_palette(&mut self, _: &CommandPalette, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_command_palette(
+        &mut self,
+        _: &CommandPalette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.open_palette(window, cx);
     }
 
@@ -330,16 +382,36 @@ impl WorkspaceView {
                 div()
                     .h_flex()
                     .gap_1()
-                    .child(mode_button("m-editor", "Editor", mode == Mode::Editor, FocusEditor))
+                    .child(mode_button(
+                        "m-editor",
+                        "Editor",
+                        mode == Mode::Editor,
+                        FocusEditor,
+                    ))
                     .child(mode_button(
                         "m-terminal",
                         "Terminal",
                         mode == Mode::Terminal,
                         FocusTerminal,
                     ))
-                    .child(mode_button("m-agent", "Agent", mode == Mode::Agent, FocusAgent))
-                    .child(mode_button("m-lifeos", "Life OS", mode == Mode::LifeOs, OpenLifeOs))
-                    .child(mode_button("m-recall", "Recall", mode == Mode::Recall, OpenRecall)),
+                    .child(mode_button(
+                        "m-agent",
+                        "Agent",
+                        mode == Mode::Agent,
+                        FocusAgent,
+                    ))
+                    .child(mode_button(
+                        "m-lifeos",
+                        "Life OS",
+                        mode == Mode::LifeOs,
+                        OpenLifeOs,
+                    ))
+                    .child(mode_button(
+                        "m-recall",
+                        "Recall",
+                        mode == Mode::Recall,
+                        OpenRecall,
+                    )),
             )
     }
 
@@ -544,26 +616,34 @@ impl WorkspaceView {
                 }),
             );
 
-        // The editor is a single shared surface; render it in the focused
-        // Editor-mode leaf. Other leaves show a labelled placeholder until each
-        // pane carries its own content binding (#25).
-        if self.mode == Mode::Editor && focused {
-            base.child(self.editor.clone()).into_any_element()
-        } else {
-            base.v_flex()
-                .items_center()
-                .justify_center()
-                .gap_2()
-                .text_color(cx.theme().muted_foreground)
-                .child(
-                    div()
-                        .text_color(cx.theme().foreground)
-                        .font_semibold()
-                        .child(self.mode.label()),
-                )
-                .child(div().text_xs().child(format!("pane {id}")))
-                .into_any_element()
+        // Each mode is backed by a single shared view rendered in the focused
+        // leaf; unfocused leaves show a labelled placeholder. Per-pane content
+        // binding (a different mode per leaf) is a later refinement.
+        // The terminal's live surface lives in the bottom dock (a gpui entity
+        // renders once per frame), so Terminal mode falls through to the
+        // placeholder here and the dock shows the real thing.
+        if focused {
+            match self.mode {
+                Mode::Editor => return base.child(self.editor.clone()).into_any_element(),
+                Mode::Agent => return base.child(self.agent.clone()).into_any_element(),
+                Mode::LifeOs => return base.child(self.lifeos.clone()).into_any_element(),
+                Mode::Recall => return base.child(self.recall.clone()).into_any_element(),
+                Mode::Terminal => {}
+            }
         }
+        base.v_flex()
+            .items_center()
+            .justify_center()
+            .gap_2()
+            .text_color(cx.theme().muted_foreground)
+            .child(
+                div()
+                    .text_color(cx.theme().foreground)
+                    .font_semibold()
+                    .child(self.mode.label()),
+            )
+            .child(div().text_xs().child(format!("pane {id}")))
+            .into_any_element()
     }
 
     /// The bottom terminal dock: a header strip over the live terminal view.
@@ -619,21 +699,22 @@ impl WorkspaceView {
                     .child(self.status_hint.clone()),
             )
             .right(
-                div().text_xs().text_color(cx.theme().muted_foreground).child(format!(
-                    "{} · {} pane{} · main",
-                    self.mode.label(),
-                    panes,
-                    if panes == 1 { "" } else { "s" }
-                )),
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(format!(
+                        "{} · {} pane{} · main",
+                        self.mode.label(),
+                        panes,
+                        if panes == 1 { "" } else { "s" }
+                    )),
             )
     }
 
     /// The command palette overlay: a scrim + centered modal with a fuzzy list.
     fn palette_overlay(&self, cx: &Context<Self>) -> impl IntoElement {
         let matches = self.palette_matches();
-        let selected = self
-            .palette_selected
-            .min(matches.len().saturating_sub(1));
+        let selected = self.palette_selected.min(matches.len().saturating_sub(1));
 
         let modal = div()
             .track_focus(&self.palette_focus)

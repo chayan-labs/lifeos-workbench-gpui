@@ -11,18 +11,22 @@
 // Shared, renderer-agnostic: the in-process API handle.
 pub mod api;
 
+// Renderer-agnostic logic reused by the gpui frontend (no ratatui/crossterm):
+// the ACP client + its diff model, and the module-manifest parser. These were
+// inherited from the origin repo but carry no TUI coupling, so the gpui panes
+// link them directly rather than re-implementing them.
+pub mod acp;
+pub mod diff;
+pub mod manifest;
+
 // GPU-native gpui frontend (default).
 pub mod ui;
 
 // Legacy ratatui frontend (feature-gated). Ported into `ui/` incrementally.
 #[cfg(feature = "legacy-tui")]
-pub mod acp;
-#[cfg(feature = "legacy-tui")]
 pub mod agent_pane;
 #[cfg(feature = "legacy-tui")]
 pub mod decorations;
-#[cfg(feature = "legacy-tui")]
-pub mod diff;
 #[cfg(feature = "legacy-tui")]
 pub mod driver;
 #[cfg(feature = "legacy-tui")]
@@ -39,8 +43,6 @@ pub mod layout;
 pub mod lifeos_pane;
 #[cfg(feature = "legacy-tui")]
 pub mod lsp;
-#[cfg(feature = "legacy-tui")]
-pub mod manifest;
 #[cfg(feature = "legacy-tui")]
 pub mod markdown;
 #[cfg(feature = "legacy-tui")]

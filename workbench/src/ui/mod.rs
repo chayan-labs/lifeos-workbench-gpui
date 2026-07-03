@@ -7,13 +7,17 @@
 //! builders) is consumed by the views here; nothing gpui leaks back into it.
 
 pub mod actions;
+pub mod agent;
+pub mod api_host;
 pub mod app;
 pub mod commands;
 pub mod config;
 pub mod editor;
 pub mod file_tree;
+pub mod lifeos;
 pub mod menu;
 pub mod panes;
+pub mod recall;
 pub mod terminal;
 pub mod workspace_view;
 

@@ -35,7 +35,11 @@ impl LayoutNode {
                 second: Box::new(LayoutNode::Leaf(new_pane)),
             },
             LayoutNode::Leaf(_) => self.clone(),
-            LayoutNode::Split { dir: d, first, second } => LayoutNode::Split {
+            LayoutNode::Split {
+                dir: d,
+                first,
+                second,
+            } => LayoutNode::Split {
                 dir: *d,
                 first: Box::new(first.split(target, dir, new_pane)),
                 second: Box::new(second.split(target, dir, new_pane)),

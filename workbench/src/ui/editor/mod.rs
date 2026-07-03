@@ -64,7 +64,10 @@ impl EditorView {
         let language = lang::language_for(path);
         let (content, language) = match std::fs::read_to_string(path) {
             Ok(text) => (text, language),
-            Err(e) => (format!("// failed to open {}:\n// {e}", path.display()), lang::PLAIN),
+            Err(e) => (
+                format!("// failed to open {}:\n// {e}", path.display()),
+                lang::PLAIN,
+            ),
         };
 
         self.path = Some(path.to_path_buf());
@@ -115,9 +118,11 @@ impl EditorView {
                     .font_semibold()
                     .child("Helix engine"),
             )
-            .child(div().text_xs().child(
-                "not yet wired - pending helix-core syntax alignment to tree-sitter 0.26",
-            ))
+            .child(
+                div().text_xs().child(
+                    "not yet wired - pending helix-core syntax alignment to tree-sitter 0.26",
+                ),
+            )
             .child(
                 div()
                     .text_xs()

@@ -8,7 +8,7 @@
 use gpui::{App, Menu, MenuItem};
 
 use super::actions::{
-    About, CloseTab, ClosePane, CommandPalette, FocusAgent, FocusEditor, FocusNextPane,
+    About, ClosePane, CloseTab, CommandPalette, FocusAgent, FocusEditor, FocusNextPane,
     FocusPrevPane, FocusTerminal, NewTab, OpenFile, OpenLifeOs, OpenRecall, Quit, SplitDown,
     SplitRight, ToggleDock, ToggleSidebar,
 };
