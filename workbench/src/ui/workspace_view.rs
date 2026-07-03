@@ -114,6 +114,23 @@ impl WorkspaceView {
         let recall = cx.new(|cx| RecallView::new(api.clone(), window, cx));
         let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let mode = Mode::from_env();
+
+        // Focus the initial mode's pane on startup. This is not just a nicety:
+        // gpui dispatches native-menu actions along the focused element's
+        // ancestor chain, so with nothing focused the workspace's `on_action`
+        // handlers sit off the dispatch path and menu items silently no-op.
+        // Focusing a pane (a descendant of the workspace root) puts the root's
+        // handlers back in the path so menu items fire. (Quit works regardless
+        // because it is a global `cx.on_action`.)
+        let init_focus = match mode {
+            Mode::Editor => editor.read(cx).handle(cx),
+            Mode::Terminal => terminal.read(cx).handle(),
+            Mode::Agent => agent.read(cx).handle(),
+            Mode::LifeOs => lifeos.read(cx).handle(),
+            Mode::Recall => recall.read(cx).handle(),
+        };
+        window.focus(&init_focus, cx);
+
         Self {
             sidebar_open: true,
             dock_open: true,
