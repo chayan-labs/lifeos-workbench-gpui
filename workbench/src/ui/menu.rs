@@ -9,8 +9,9 @@ use gpui::{App, Menu, MenuItem};
 
 use super::actions::{
     About, ClosePane, CloseTab, CommandPalette, FocusAgent, FocusEditor, FocusNextPane,
-    FocusPrevPane, FocusTerminal, NewTab, OpenFile, OpenLifeOs, OpenRecall, Quit, SplitDown,
-    SplitRight, ToggleDock, ToggleSidebar,
+    FocusPrevPane, FocusTerminal, NewTab, OpenFile, OpenJobs, OpenLifeOs, OpenMemory, OpenRecall,
+    OpenSelfExtend, OpenSettings, OpenTrading, OpenVcs, Quit, SplitDown, SplitRight, ToggleDock,
+    ToggleSidebar,
 };
 
 /// Install the application menu bar.
@@ -75,7 +76,17 @@ fn build() -> Vec<Menu> {
             items: vec![
                 MenuItem::action("Modules", OpenLifeOs),
                 MenuItem::action("Recall Search", OpenRecall),
+                MenuItem::action("Memory", OpenMemory),
+                MenuItem::action("Trading", OpenTrading),
+                MenuItem::action("VCS", OpenVcs),
+                MenuItem::action("Jobs & Pipelines", OpenJobs),
+                MenuItem::action("Self-extension", OpenSelfExtend),
             ],
+            disabled: false,
+        },
+        Menu {
+            name: "Workbench".into(),
+            items: vec![MenuItem::action("Settings...", OpenSettings)],
             disabled: false,
         },
     ]

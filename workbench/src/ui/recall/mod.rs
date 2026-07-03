@@ -20,6 +20,7 @@ use serde_json::Value;
 
 use super::api_host::{ApiHost, HostStatus};
 use super::lifeos::urlencode;
+use super::theme::pane_bg;
 
 const POLL_MS: u64 = 150;
 
@@ -273,7 +274,7 @@ impl Render for RecallView {
             .on_key_down(cx.listener(Self::on_key))
             .v_flex()
             .size_full()
-            .bg(cx.theme().background)
+            .bg(pane_bg(cx))
             .child(query_line)
             .child(list)
     }

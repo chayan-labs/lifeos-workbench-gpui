@@ -21,6 +21,7 @@ use gpui_component::input::{Input, InputState, TabSize};
 use gpui_component::{ActiveTheme, StyledExt};
 
 use super::config::{EditorConfig, EditorEngine};
+use super::theme::pane_bg;
 
 pub struct EditorView {
     config: EditorConfig,
@@ -110,7 +111,7 @@ impl EditorView {
             .items_center()
             .justify_center()
             .gap_2()
-            .bg(cx.theme().background)
+            .bg(pane_bg(cx))
             .text_color(cx.theme().muted_foreground)
             .child(
                 div()
@@ -142,7 +143,7 @@ impl Render for EditorView {
         match self.config.engine {
             EditorEngine::Native => div()
                 .size_full()
-                .bg(cx.theme().background)
+                .bg(pane_bg(cx))
                 .child(
                     Input::new(&self.state)
                         .bordered(false)

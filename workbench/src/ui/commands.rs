@@ -25,6 +25,12 @@ pub enum CommandId {
     OpenAgentPane,
     OpenSearchPane,
     OpenLifeOsPane,
+    OpenSettingsPane,
+    OpenMemoryPane,
+    OpenTradingPane,
+    OpenVcsPane,
+    OpenJobsPane,
+    OpenSelfExtendPane,
     Quit,
 }
 
@@ -54,6 +60,12 @@ pub fn commands() -> Vec<Command> {
         (OpenAgentPane, "agent: open pane"),
         (OpenSearchPane, "search: recall (hybrid)"),
         (OpenLifeOsPane, "life os: browse modules"),
+        (OpenSettingsPane, "settings: open"),
+        (OpenMemoryPane, "memory: browse / recall"),
+        (OpenTradingPane, "trading: positions (read-only)"),
+        (OpenVcsPane, "vcs: history / diff / refs"),
+        (OpenJobsPane, "jobs: queue / pipeline registry"),
+        (OpenSelfExtendPane, "self-extend: request a module"),
         (Quit, "workbench: quit"),
     ]
     .into_iter()

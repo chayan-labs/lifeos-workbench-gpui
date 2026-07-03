@@ -25,8 +25,9 @@ use gpui_component::{ActiveTheme, Sizable, StyledExt, TitleBar};
 
 use super::actions::{
     About, ClosePane, CloseTab, CommandPalette, FocusAgent, FocusEditor, FocusNextPane,
-    FocusPrevPane, FocusTerminal, NewTab, OpenFile, OpenLifeOs, OpenRecall, SplitDown, SplitRight,
-    ToggleDock, ToggleSidebar,
+    FocusPrevPane, FocusTerminal, NewTab, OpenFile, OpenJobs, OpenLifeOs, OpenMemory, OpenRecall,
+    OpenSelfExtend, OpenSettings, OpenTrading, OpenVcs, SplitDown, SplitRight, ToggleDock,
+    ToggleSidebar,
 };
 use super::agent::AgentView;
 use super::api_host::ApiHost;
@@ -34,10 +35,17 @@ use super::commands::{commands, filter, CommandId};
 use super::config::Config;
 use super::editor::EditorView;
 use super::file_tree::FileTree;
+use super::jobs::JobsView;
 use super::lifeos::LifeOsView;
+use super::memory::MemoryView;
 use super::panes::{Layout, LayoutNode, PaneId, SplitDir};
 use super::recall::RecallView;
+use super::selfextend::SelfExtendView;
+use super::settings::SettingsView;
 use super::terminal::TerminalView;
+use super::theme::{chrome_bg, glass_edge, pane_bg};
+use super::trading::TradingView;
+use super::vcs::VcsView;
 
 /// Which surface a pane currently shows. Real content arrives per mode in later
 /// steps; for now each leaf renders a labelled placeholder.
@@ -48,6 +56,12 @@ pub enum Mode {
     Agent,
     LifeOs,
     Recall,
+    Settings,
+    Memory,
+    Trading,
+    Vcs,
+    Jobs,
+    SelfExtend,
 }
 
 impl Mode {
@@ -58,6 +72,12 @@ impl Mode {
             Mode::Agent => "Agent",
             Mode::LifeOs => "Life OS",
             Mode::Recall => "Recall",
+            Mode::Settings => "Settings",
+            Mode::Memory => "Memory",
+            Mode::Trading => "Trading",
+            Mode::Vcs => "VCS",
+            Mode::Jobs => "Jobs",
+            Mode::SelfExtend => "Self-extend",
         }
     }
 
@@ -74,6 +94,12 @@ impl Mode {
             "agent" => Mode::Agent,
             "lifeos" | "life-os" | "os" => Mode::LifeOs,
             "recall" | "search" => Mode::Recall,
+            "settings" => Mode::Settings,
+            "memory" => Mode::Memory,
+            "trading" => Mode::Trading,
+            "vcs" => Mode::Vcs,
+            "jobs" => Mode::Jobs,
+            "selfextend" | "self-extend" => Mode::SelfExtend,
             _ => Mode::Editor,
         }
     }
@@ -90,6 +116,12 @@ pub struct WorkspaceView {
     lifeos: Entity<LifeOsView>,
     agent: Entity<AgentView>,
     recall: Entity<RecallView>,
+    settings: Entity<SettingsView>,
+    memory: Entity<MemoryView>,
+    trading: Entity<TradingView>,
+    vcs: Entity<VcsView>,
+    jobs: Entity<JobsView>,
+    selfextend: Entity<SelfExtendView>,
     layout: Layout,
     file_tree: FileTree,
     selected_file: Option<PathBuf>,
@@ -110,8 +142,14 @@ impl WorkspaceView {
         let terminal = cx.new(|cx| TerminalView::new(window, cx));
         let editor = cx.new(|cx| EditorView::new(config.editor, window, cx));
         let lifeos = cx.new(|cx| LifeOsView::new(api.clone(), window, cx));
-        let agent = cx.new(|cx| AgentView::new(window, cx));
+        let agent = cx.new(|cx| AgentView::new(&config, window, cx));
         let recall = cx.new(|cx| RecallView::new(api.clone(), window, cx));
+        let settings = cx.new(|cx| SettingsView::new(&config, window, cx));
+        let memory = cx.new(|cx| MemoryView::new(api.clone(), window, cx));
+        let trading = cx.new(|cx| TradingView::new(api.clone(), window, cx));
+        let vcs = cx.new(|cx| VcsView::new(api.clone(), window, cx));
+        let jobs = cx.new(|cx| JobsView::new(api.clone(), window, cx));
+        let selfextend = cx.new(|cx| SelfExtendView::new(api.clone(), window, cx));
         let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let mode = Mode::from_env();
 
@@ -128,6 +166,12 @@ impl WorkspaceView {
             Mode::Agent => agent.read(cx).handle(),
             Mode::LifeOs => lifeos.read(cx).handle(),
             Mode::Recall => recall.read(cx).handle(),
+            Mode::Settings => settings.read(cx).handle(),
+            Mode::Memory => memory.read(cx).handle(),
+            Mode::Trading => trading.read(cx).handle(),
+            Mode::Vcs => vcs.read(cx).handle(),
+            Mode::Jobs => jobs.read(cx).handle(),
+            Mode::SelfExtend => selfextend.read(cx).handle(),
         };
         window.focus(&init_focus, cx);
 
@@ -141,6 +185,12 @@ impl WorkspaceView {
             lifeos,
             agent,
             recall,
+            settings,
+            memory,
+            trading,
+            vcs,
+            jobs,
+            selfextend,
             layout: Layout::new(),
             file_tree: FileTree::open(&root),
             selected_file: None,
@@ -230,6 +280,36 @@ impl WorkspaceView {
                 let handle = self.lifeos.read(cx).handle();
                 window.focus(&handle, cx);
             }
+            OpenSettingsPane => {
+                self.set_mode(Mode::Settings);
+                let handle = self.settings.read(cx).handle();
+                window.focus(&handle, cx);
+            }
+            OpenMemoryPane => {
+                self.set_mode(Mode::Memory);
+                let handle = self.memory.read(cx).handle();
+                window.focus(&handle, cx);
+            }
+            OpenTradingPane => {
+                self.set_mode(Mode::Trading);
+                let handle = self.trading.read(cx).handle();
+                window.focus(&handle, cx);
+            }
+            OpenVcsPane => {
+                self.set_mode(Mode::Vcs);
+                let handle = self.vcs.read(cx).handle();
+                window.focus(&handle, cx);
+            }
+            OpenJobsPane => {
+                self.set_mode(Mode::Jobs);
+                let handle = self.jobs.read(cx).handle();
+                window.focus(&handle, cx);
+            }
+            OpenSelfExtendPane => {
+                self.set_mode(Mode::SelfExtend);
+                let handle = self.selfextend.read(cx).handle();
+                window.focus(&handle, cx);
+            }
             Quit => window.dispatch_action(Box::new(super::actions::Quit), cx),
         }
         cx.notify();
@@ -283,6 +363,24 @@ impl WorkspaceView {
     }
     fn on_open_recall(&mut self, _: &OpenRecall, w: &mut Window, cx: &mut Context<Self>) {
         self.run_command(CommandId::OpenSearchPane, w, cx);
+    }
+    fn on_open_settings(&mut self, _: &OpenSettings, w: &mut Window, cx: &mut Context<Self>) {
+        self.run_command(CommandId::OpenSettingsPane, w, cx);
+    }
+    fn on_open_memory(&mut self, _: &OpenMemory, w: &mut Window, cx: &mut Context<Self>) {
+        self.run_command(CommandId::OpenMemoryPane, w, cx);
+    }
+    fn on_open_trading(&mut self, _: &OpenTrading, w: &mut Window, cx: &mut Context<Self>) {
+        self.run_command(CommandId::OpenTradingPane, w, cx);
+    }
+    fn on_open_vcs(&mut self, _: &OpenVcs, w: &mut Window, cx: &mut Context<Self>) {
+        self.run_command(CommandId::OpenVcsPane, w, cx);
+    }
+    fn on_open_jobs(&mut self, _: &OpenJobs, w: &mut Window, cx: &mut Context<Self>) {
+        self.run_command(CommandId::OpenJobsPane, w, cx);
+    }
+    fn on_open_selfextend(&mut self, _: &OpenSelfExtend, w: &mut Window, cx: &mut Context<Self>) {
+        self.run_command(CommandId::OpenSelfExtendPane, w, cx);
     }
     fn on_new_tab(&mut self, _: &NewTab, w: &mut Window, cx: &mut Context<Self>) {
         self.run_command(CommandId::NewTab, w, cx);
@@ -428,6 +526,32 @@ impl WorkspaceView {
                         "Recall",
                         mode == Mode::Recall,
                         OpenRecall,
+                    ))
+                    .child(mode_button(
+                        "m-memory",
+                        "Memory",
+                        mode == Mode::Memory,
+                        OpenMemory,
+                    ))
+                    .child(mode_button(
+                        "m-trading",
+                        "Trading",
+                        mode == Mode::Trading,
+                        OpenTrading,
+                    ))
+                    .child(mode_button("m-vcs", "VCS", mode == Mode::Vcs, OpenVcs))
+                    .child(mode_button("m-jobs", "Jobs", mode == Mode::Jobs, OpenJobs))
+                    .child(mode_button(
+                        "m-selfextend",
+                        "Self-extend",
+                        mode == Mode::SelfExtend,
+                        OpenSelfExtend,
+                    ))
+                    .child(mode_button(
+                        "m-settings",
+                        "Settings",
+                        mode == Mode::Settings,
+                        OpenSettings,
                     )),
             )
     }
@@ -442,9 +566,9 @@ impl WorkspaceView {
             .gap_1()
             .px_2()
             .py_1()
-            .bg(cx.theme().secondary)
+            .bg(chrome_bg(cx))
             .border_b_1()
-            .border_color(cx.theme().border)
+            .border_color(glass_edge(cx))
             .children(self.layout.tabs.iter().enumerate().map(|(i, _)| {
                 let is_active = i == active;
                 div()
@@ -454,9 +578,9 @@ impl WorkspaceView {
                     .rounded_md()
                     .cursor_pointer()
                     .bg(if is_active {
-                        cx.theme().background
+                        pane_bg(cx)
                     } else {
-                        cx.theme().secondary
+                        chrome_bg(cx)
                     })
                     .text_color(if is_active {
                         cx.theme().foreground
@@ -508,7 +632,7 @@ impl WorkspaceView {
         div()
             .v_flex()
             .size_full()
-            .bg(cx.theme().sidebar)
+            .bg(chrome_bg(cx))
             .text_color(cx.theme().sidebar_foreground)
             .child(
                 div()
@@ -624,7 +748,7 @@ impl WorkspaceView {
             .size_full()
             .border_1()
             .border_color(border)
-            .bg(cx.theme().background)
+            .bg(pane_bg(cx))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, _, cx| {
@@ -645,6 +769,12 @@ impl WorkspaceView {
                 Mode::Agent => return base.child(self.agent.clone()).into_any_element(),
                 Mode::LifeOs => return base.child(self.lifeos.clone()).into_any_element(),
                 Mode::Recall => return base.child(self.recall.clone()).into_any_element(),
+                Mode::Settings => return base.child(self.settings.clone()).into_any_element(),
+                Mode::Memory => return base.child(self.memory.clone()).into_any_element(),
+                Mode::Trading => return base.child(self.trading.clone()).into_any_element(),
+                Mode::Vcs => return base.child(self.vcs.clone()).into_any_element(),
+                Mode::Jobs => return base.child(self.jobs.clone()).into_any_element(),
+                Mode::SelfExtend => return base.child(self.selfextend.clone()).into_any_element(),
                 Mode::Terminal => {}
             }
         }
@@ -669,13 +799,13 @@ impl WorkspaceView {
             .v_flex()
             .size_full()
             .border_t_1()
-            .border_color(cx.theme().border)
+            .border_color(glass_edge(cx))
             .child(
                 div()
                     .px_3()
                     .py_1()
                     .text_xs()
-                    .bg(cx.theme().secondary)
+                    .bg(chrome_bg(cx))
                     .text_color(cx.theme().muted_foreground)
                     .child("TERMINAL"),
             )
@@ -809,7 +939,7 @@ impl Render for WorkspaceView {
         let main = div()
             .v_flex()
             .size_full()
-            .bg(cx.theme().background)
+            .bg(pane_bg(cx))
             .text_color(cx.theme().foreground)
             .child(self.title_bar(cx))
             .child(self.tab_strip(cx))
@@ -829,6 +959,12 @@ impl Render for WorkspaceView {
             .on_action(cx.listener(Self::on_focus_agent))
             .on_action(cx.listener(Self::on_open_lifeos))
             .on_action(cx.listener(Self::on_open_recall))
+            .on_action(cx.listener(Self::on_open_settings))
+            .on_action(cx.listener(Self::on_open_memory))
+            .on_action(cx.listener(Self::on_open_trading))
+            .on_action(cx.listener(Self::on_open_vcs))
+            .on_action(cx.listener(Self::on_open_jobs))
+            .on_action(cx.listener(Self::on_open_selfextend))
             .on_action(cx.listener(Self::on_new_tab))
             .on_action(cx.listener(Self::on_close_tab))
             .on_action(cx.listener(Self::on_split_right))

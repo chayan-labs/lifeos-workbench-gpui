@@ -2,12 +2,15 @@
 //!
 //! Wraps the renderer-agnostic [`AcpAgent`] (the ACP client - we spawn the
 //! configured agent and converse, we do NOT write a model) in a gpui view: a
-//! scrolling transcript, a focusable input line, and the inline diff-review UI
-//! for staged edits. Agent-proposed `fs/write_text_file`s are never applied
+//! header showing/changing the resolved agent command, a scrolling
+//! transcript, a focusable input line, and the inline diff-review UI for
+//! staged edits. Agent-proposed `fs/write_text_file`s are never applied
 //! silently; they arrive as [`crate::acp::ProposedEdit`]s the user accepts or
 //! rejects per hunk (mouse or keyboard), and only then does the ACP response
 //! resolve. When the configured agent binary is absent the pane says so honestly
 //! rather than pretending an agent is attached.
+
+pub mod detect;
 
 use std::time::Duration;
 
@@ -20,22 +23,42 @@ use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::{ActiveTheme, Sizable, StyledExt};
 
 use crate::acp::{AcpAgent, Entry};
+use crate::ui::config::{self, Config};
+use crate::ui::theme::pane_bg;
 
 const POLL_MS: u64 = 120;
 
 pub struct AgentView {
     agent: Option<AcpAgent>,
+    /// The resolved command this pane's agent was spawned with. A running
+    /// agent process is not hot-swapped when this changes - the next spawn
+    /// (pane recreation) picks up a newly-picked command.
+    agent_cmd: String,
     input: String,
     /// Selected hunk index when reviewing (for keyboard navigation).
     review_cursor: usize,
     reviewing: bool,
+    /// Whether the "Change..." agent picker is expanded.
+    picker_open: bool,
+    picker_custom: String,
     focus: FocusHandle,
     _poll: Task<()>,
 }
 
-/// The agent command: `WORKBENCH_AGENT_CMD` or the Claude Code ACP adapter.
-pub fn agent_command() -> String {
-    std::env::var("WORKBENCH_AGENT_CMD").unwrap_or_else(|_| "claude-code-acp".into())
+/// Resolve the agent command in explicit precedence order: `config.lua`'s
+/// `agent.command` > `WORKBENCH_AGENT_CMD` env > first auto-detected `$PATH`
+/// match > the hardcoded Claude Code ACP adapter fallback.
+pub fn resolve_agent_command(config: &Config) -> String {
+    if let Some(cmd) = &config.agent.command {
+        return cmd.clone();
+    }
+    if let Ok(cmd) = std::env::var("WORKBENCH_AGENT_CMD") {
+        return cmd;
+    }
+    if let Some(found) = detect::scan_path().into_iter().next() {
+        return found.name;
+    }
+    "claude-code-acp".to_string()
 }
 
 /// The toolbelt passed at session/new: this same binary re-entered as a stdio
@@ -53,14 +76,18 @@ pub fn toolbelt_servers() -> Vec<serde_json::Value> {
 }
 
 impl AgentView {
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(config: &Config, _window: &mut Window, cx: &mut Context<Self>) -> Self {
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let agent = AcpAgent::spawn(&agent_command(), &cwd, toolbelt_servers());
+        let agent_cmd = resolve_agent_command(config);
+        let agent = AcpAgent::spawn(&agent_cmd, &cwd, toolbelt_servers());
         let mut view = Self {
             agent,
+            agent_cmd,
             input: String::new(),
             review_cursor: 0,
             reviewing: false,
+            picker_open: false,
+            picker_custom: String::new(),
             focus: cx.focus_handle(),
             _poll: Task::ready(()),
         };
@@ -71,6 +98,23 @@ impl AgentView {
 
     pub fn handle(&self) -> FocusHandle {
         self.focus.clone()
+    }
+
+    fn toggle_picker(&mut self, cx: &mut Context<Self>) {
+        self.picker_open = !self.picker_open;
+        cx.notify();
+    }
+
+    /// Persist a newly-picked agent command to `config.lua` and update the
+    /// displayed command. Does not respawn the running agent process.
+    fn choose_agent(&mut self, command: String, cx: &mut Context<Self>) {
+        if let Err(e) = config::write_back("agent", "command", &command) {
+            self.agent_cmd = format!("{command} (could not save: {e})");
+        } else {
+            self.agent_cmd = command;
+        }
+        self.picker_open = false;
+        cx.notify();
     }
 
     fn submit(&mut self, cx: &mut Context<Self>) {
@@ -87,6 +131,9 @@ impl AgentView {
     }
 
     fn on_key(&mut self, e: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.picker_open {
+            return self.on_picker_key(e, cx);
+        }
         let ks = &e.keystroke;
         match ks.key.as_str() {
             "enter" => self.submit(cx),
@@ -99,6 +146,39 @@ impl AgentView {
                     if let Some(ch) = &ks.key_char {
                         if !ch.is_empty() && !ch.chars().any(|c| c.is_control()) {
                             self.input.push_str(ch);
+                            cx.notify();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Keys while the agent picker is expanded: type a custom path, Enter to
+    /// use it. Routed through the same root `on_key` (not a second
+    /// `track_focus`) since only one focus handle exists on this pane.
+    fn on_picker_key(&mut self, e: &KeyDownEvent, cx: &mut Context<Self>) {
+        let ks = &e.keystroke;
+        match ks.key.as_str() {
+            "enter" => {
+                let path = self.picker_custom.trim().to_string();
+                if !path.is_empty() {
+                    self.choose_agent(path, cx);
+                }
+            }
+            "escape" => {
+                self.picker_open = false;
+                cx.notify();
+            }
+            "backspace" => {
+                self.picker_custom.pop();
+                cx.notify();
+            }
+            _ => {
+                if !ks.modifiers.platform && !ks.modifiers.control {
+                    if let Some(ch) = &ks.key_char {
+                        if !ch.is_empty() && !ch.chars().any(|c| c.is_control()) {
+                            self.picker_custom.push_str(ch);
                             cx.notify();
                         }
                     }
@@ -172,8 +252,9 @@ impl AgentView {
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
                         .child(format!(
-                            "could not start `{}` - set WORKBENCH_AGENT_CMD to your ACP adapter",
-                            agent_command()
+                            "could not start `{}` - pick a detected agent above, or set \
+                             WORKBENCH_AGENT_CMD to your ACP adapter",
+                            self.agent_cmd
                         )),
                 );
         };
@@ -309,6 +390,122 @@ impl AgentView {
         Some(block)
     }
 
+    /// Header row: the resolved agent command + a "Change..." toggle.
+    fn header(&self, cx: &Context<Self>) -> impl IntoElement {
+        div()
+            .h_flex()
+            .items_center()
+            .justify_between()
+            .w_full()
+            .px_3()
+            .py_2()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .child(
+                div()
+                    .h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("agent"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_semibold()
+                            .text_color(cx.theme().foreground)
+                            .child(self.agent_cmd.clone()),
+                    ),
+            )
+            .child(
+                Button::new("agent-change")
+                    .label(if self.picker_open {
+                        "Close"
+                    } else {
+                        "Change..."
+                    })
+                    .ghost()
+                    .small()
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_picker(cx))),
+            )
+    }
+
+    /// The agent picker: detected `$PATH` candidates + a custom-path field.
+    /// Selecting one persists to `config.lua` (see `choose_agent`); a running
+    /// agent process isn't hot-swapped, so this only affects the next spawn.
+    fn picker(&self, cx: &Context<Self>) -> impl IntoElement {
+        let found = detect::scan_path();
+        let mut block = div()
+            .v_flex()
+            .gap_1()
+            .p_2()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().secondary);
+
+        if found.is_empty() {
+            block = block.child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("no known agent CLIs found on $PATH"),
+            );
+        }
+        for (i, a) in found.into_iter().enumerate() {
+            let name = a.name.clone();
+            let path_str = a.path.display().to_string();
+            block = block.child(
+                div()
+                    .id(("agent-candidate", i))
+                    .h_flex()
+                    .items_center()
+                    .justify_between()
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .text_sm()
+                    .text_color(cx.theme().foreground)
+                    .child(a.name.clone())
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(path_str),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| this.choose_agent(name.clone(), cx)),
+                    ),
+            );
+        }
+
+        block.child(
+            div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .py_1()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("custom path (type, then Enter):"),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .text_sm()
+                        .text_color(cx.theme().foreground)
+                        .child(format!("{}\u{2588}", self.picker_custom)),
+                ),
+        )
+    }
+
     fn input_line(&self, cx: &Context<Self>) -> impl IntoElement {
         let enabled = self.agent.is_some();
         div()
@@ -356,8 +553,12 @@ impl Render for AgentView {
             .on_key_down(cx.listener(Self::on_key))
             .v_flex()
             .size_full()
-            .bg(cx.theme().background)
-            .child(self.transcript(cx));
+            .bg(pane_bg(cx))
+            .child(self.header(cx));
+        if self.picker_open {
+            root = root.child(self.picker(cx));
+        }
+        root = root.child(self.transcript(cx));
         if let Some(block) = self.review_block(cx) {
             root = root.child(block);
         }

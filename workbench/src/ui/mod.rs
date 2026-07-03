@@ -15,11 +15,18 @@ pub mod config;
 pub mod editor;
 pub mod file_tree;
 pub mod import;
+pub mod jobs;
 pub mod lifeos;
+pub mod memory;
 pub mod menu;
 pub mod panes;
 pub mod recall;
+pub mod selfextend;
+pub mod settings;
 pub mod terminal;
+pub mod theme;
+pub mod trading;
+pub mod vcs;
 pub mod workspace_view;
 
 pub use app::run;

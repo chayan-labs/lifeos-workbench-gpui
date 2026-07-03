@@ -16,17 +16,62 @@ pub enum Rendered {
     List(ListView),
     Board(BoardView),
     Detail(DetailView),
+    Table(TableView),
+    Calendar(CalendarView),
+    Gallery(GalleryView),
+    Timeline(TimelineView),
+    Map(MapView),
 }
 
 /// Entry point: pick the view-model for a manifest view. Unknown kinds degrade
-/// to `list`.
+/// to `list` - `graph` (the learning module's "Knowledge Tree") included,
+/// matching the upstream React app's own `KIND_RENDERERS[kind] || GenericList`
+/// fallback (it has no graph renderer either), so this is parity, not a gap.
 pub fn dispatch(view: &View, entity_type: &EntityType, entities: &[Value]) -> Rendered {
     let filtered = apply_filter(view.filter.as_deref(), entities);
     match view.kind.as_str() {
         "board" => Rendered::Board(BoardView::build(view, entity_type, &filtered)),
         "detail" => Rendered::Detail(DetailView::build(entity_type, filtered.first())),
+        "table" => Rendered::Table(TableView::build(entity_type, &filtered)),
+        "calendar" => Rendered::Calendar(CalendarView::build(entity_type, &filtered)),
+        "gallery" => Rendered::Gallery(GalleryView::build(entity_type, &filtered)),
+        "timeline" => Rendered::Timeline(TimelineView::build(entity_type, &filtered)),
+        "map" => Rendered::Map(MapView::build(entity_type, &filtered)),
+        // "graph" and anything else: honest list fallback.
         _ => Rendered::List(ListView::build(entity_type, &filtered)),
     }
+}
+
+/// Find the first attr whose declared `type` matches one of `types`, honouring
+/// `entity_type.attrs`' declaration order isn't guaranteed (it's a HashMap), so
+/// this sorts by name for determinism. Manifests don't declare a per-view date/
+/// image/location field, so kinds that need one (calendar/gallery/timeline/map)
+/// infer it from the entity type's own attr types - the same kind of heuristic
+/// `ListView` already applies via `display`.
+fn find_attr_by_type(entity_type: &EntityType, types: &[&str]) -> Option<String> {
+    let mut names: Vec<&String> = entity_type.attrs.keys().collect();
+    names.sort();
+    names
+        .into_iter()
+        .find(|name| {
+            entity_type
+                .attrs
+                .get(*name)
+                .is_some_and(|a| types.contains(&a.attr_type.as_str()))
+        })
+        .cloned()
+}
+
+/// Find the first attr whose name matches one of `candidates` (case-insensitive
+/// exact match), used when type-based detection isn't enough (e.g. an image
+/// attr is often typed as a plain "string" holding a URL/path).
+fn find_attr_by_name(entity_type: &EntityType, candidates: &[&str]) -> Option<String> {
+    let mut names: Vec<&String> = entity_type.attrs.keys().collect();
+    names.sort();
+    names
+        .into_iter()
+        .find(|name| candidates.iter().any(|c| c.eq_ignore_ascii_case(name)))
+        .cloned()
 }
 
 /// Minimal manifest filter support: `field = 'value'` (the shape upstream
@@ -225,6 +270,212 @@ impl DetailView {
     }
 }
 
+// ---------------------------------------------------------------------- table
+
+/// A row of arbitrary label/value pairs, in a fixed column order shared by
+/// every row (unlike `DetailView`, which is one entity's whole field stack).
+#[derive(Debug, Clone)]
+pub struct TableRow {
+    pub id: String,
+    pub cells: Vec<String>,
+}
+
+/// A denser, multi-column sibling of `ListView`: every declared attr becomes a
+/// column (manifests don't declare an explicit per-view column set, so this
+/// mirrors `DetailView`'s "every attr, sorted" heuristic rather than just the
+/// 3 `display` fields `ListView` shows).
+#[derive(Debug, Clone)]
+pub struct TableView {
+    pub columns: Vec<String>,
+    pub rows: Vec<TableRow>,
+}
+
+impl TableView {
+    fn build(entity_type: &EntityType, entities: &[Value]) -> TableView {
+        let mut columns = vec!["title".to_string()];
+        let mut attr_names: Vec<&String> = entity_type.attrs.keys().collect();
+        attr_names.sort();
+        columns.extend(attr_names.iter().map(|s| s.to_string()));
+
+        let rows = entities
+            .iter()
+            .map(|e| TableRow {
+                id: field_of(e, "id").unwrap_or_default(),
+                cells: columns
+                    .iter()
+                    .map(|c| field_of(e, c).unwrap_or_default())
+                    .collect(),
+            })
+            .collect();
+        TableView { columns, rows }
+    }
+}
+
+// ------------------------------------------------------------------- calendar
+
+#[derive(Debug, Clone)]
+pub struct CalendarEntry {
+    pub id: String,
+    pub title: String,
+    /// `YYYY-MM-DD` if the date attr parsed cleanly, else the raw value.
+    pub date: String,
+}
+
+/// Entities bucketed by their inferred date attr, day-ascending. The gpui
+/// pane lays these out as a month grid; this view-model just groups and sorts.
+#[derive(Debug, Clone)]
+pub struct CalendarView {
+    pub date_field: Option<String>,
+    pub entries: Vec<CalendarEntry>,
+}
+
+impl CalendarView {
+    fn build(entity_type: &EntityType, entities: &[Value]) -> CalendarView {
+        let date_field = find_attr_by_type(entity_type, &["date", "datetime"])
+            .or_else(|| find_attr_by_name(entity_type, &["due", "date", "start", "when"]));
+        let mut entries: Vec<CalendarEntry> = entities
+            .iter()
+            .filter_map(|e| {
+                let date = date_field.as_deref().and_then(|f| field_of(e, f))?;
+                Some(CalendarEntry {
+                    id: field_of(e, "id").unwrap_or_default(),
+                    title: field_of(e, "title").unwrap_or_default(),
+                    date,
+                })
+            })
+            .collect();
+        entries.sort_by(|a, b| a.date.cmp(&b.date));
+        CalendarView {
+            date_field,
+            entries,
+        }
+    }
+}
+
+// -------------------------------------------------------------------- gallery
+
+#[derive(Debug, Clone)]
+pub struct GalleryCard {
+    pub id: String,
+    pub title: String,
+    /// A local path or URL if an image-like attr was found; `None` degrades to
+    /// a text-only card rather than a broken image icon.
+    pub image: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GalleryView {
+    pub cards: Vec<GalleryCard>,
+}
+
+impl GalleryView {
+    fn build(entity_type: &EntityType, entities: &[Value]) -> GalleryView {
+        let image_field = find_attr_by_name(
+            entity_type,
+            &["image", "thumbnail", "photo", "cover", "asset", "preview"],
+        );
+        let cards = entities
+            .iter()
+            .map(|e| GalleryCard {
+                id: field_of(e, "id").unwrap_or_default(),
+                title: field_of(e, "title").unwrap_or_default(),
+                image: image_field
+                    .as_deref()
+                    .and_then(|f| field_of(e, f))
+                    .filter(|s| !s.is_empty()),
+            })
+            .collect();
+        GalleryView { cards }
+    }
+}
+
+// ------------------------------------------------------------------- timeline
+
+#[derive(Debug, Clone)]
+pub struct TimelineEntry {
+    pub id: String,
+    pub title: String,
+    pub date: String,
+    pub subtitle: String,
+}
+
+/// Date-sorted entries for a vertical timeline layout.
+#[derive(Debug, Clone)]
+pub struct TimelineView {
+    pub entries: Vec<TimelineEntry>,
+}
+
+impl TimelineView {
+    fn build(entity_type: &EntityType, entities: &[Value]) -> TimelineView {
+        let date_field = find_attr_by_type(entity_type, &["date", "datetime"])
+            .or_else(|| find_attr_by_name(entity_type, &["due", "date", "start", "when"]));
+        let mut entries: Vec<TimelineEntry> = entities
+            .iter()
+            .map(|e| TimelineEntry {
+                id: field_of(e, "id").unwrap_or_default(),
+                title: field_of(e, "title").unwrap_or_default(),
+                date: date_field
+                    .as_deref()
+                    .and_then(|f| field_of(e, f))
+                    .unwrap_or_default(),
+                subtitle: entity_type
+                    .display
+                    .subtitle
+                    .as_deref()
+                    .and_then(|f| field_of(e, f))
+                    .unwrap_or_default(),
+            })
+            .collect();
+        entries.sort_by(|a, b| a.date.cmp(&b.date));
+        TimelineView { entries }
+    }
+}
+
+// ------------------------------------------------------------------------ map
+
+#[derive(Debug, Clone)]
+pub struct MapEntry {
+    pub id: String,
+    pub title: String,
+    /// Coordinates or address shown as text - a real interactive map/tile
+    /// provider is out of scope (an honest structured list beats a fake map).
+    pub location: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct MapView {
+    pub entries: Vec<MapEntry>,
+}
+
+impl MapView {
+    fn build(entity_type: &EntityType, entities: &[Value]) -> MapView {
+        let lat_field = find_attr_by_name(entity_type, &["lat", "latitude"]);
+        let lng_field = find_attr_by_name(entity_type, &["lng", "lon", "longitude"]);
+        let addr_field = find_attr_by_name(entity_type, &["address", "location", "place"]);
+
+        let mut entries: Vec<MapEntry> = entities
+            .iter()
+            .filter_map(|e| {
+                let location = match (&lat_field, &lng_field) {
+                    (Some(lat_f), Some(lng_f)) => {
+                        let lat = field_of(e, lat_f)?;
+                        let lng = field_of(e, lng_f)?;
+                        format!("{lat}, {lng}")
+                    }
+                    _ => addr_field.as_deref().and_then(|f| field_of(e, f))?,
+                };
+                Some(MapEntry {
+                    id: field_of(e, "id").unwrap_or_default(),
+                    title: field_of(e, "title").unwrap_or_default(),
+                    location,
+                })
+            })
+            .collect();
+        entries.sort_by(|a, b| a.title.cmp(&b.title));
+        MapView { entries }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,15 +549,115 @@ mod tests {
     }
 
     #[test]
-    fn unknown_view_kind_degrades_to_list_never_forks_the_manifest() {
+    fn graph_kind_degrades_to_list_matching_upstreams_own_fallback() {
         let (mut view, _, et) = tasks_manifest();
-        view.kind = "gallery".into();
+        view.kind = "graph".into();
         view.group_by = None;
         view.filter = None;
         assert!(matches!(
             dispatch(&view, &et, &entities()),
             Rendered::List(_)
         ));
+    }
+
+    fn travel_manifest() -> (View, EntityType) {
+        let m = parse_manifest(
+            r#"osRegisterModule({
+                id: "travel", name: "Travel",
+                entityTypes: { trip: {
+                    label: "Trip",
+                    attrs: {
+                        start: { type: "date" },
+                        latitude: { type: "number" },
+                        longitude: { type: "number" },
+                        cover: { type: "string" }
+                    },
+                    display: { title: "title", subtitle: "start" }
+                }},
+                views: [
+                    { id: "t", label: "Table", kind: "table", type: "trip" },
+                    { id: "c", label: "Calendar", kind: "calendar", type: "trip" },
+                    { id: "g", label: "Gallery", kind: "gallery", type: "trip" },
+                    { id: "tl", label: "Timeline", kind: "timeline", type: "trip" },
+                    { id: "m", label: "Map", kind: "map", type: "trip" }
+                ]
+            });"#,
+        )
+        .unwrap();
+        (m.views[0].clone(), m.entity_types["trip"].clone())
+    }
+
+    fn trips() -> Vec<Value> {
+        vec![
+            json!({"id": "t1", "title": "Kyoto", "attrs": {
+                "start": "2026-03-02", "latitude": "35.0", "longitude": "135.7", "cover": "kyoto.jpg"
+            }}),
+            json!({"id": "t2", "title": "Reykjavik", "attrs": {
+                "start": "2026-01-10", "latitude": "64.1", "longitude": "-21.9"
+            }}),
+        ]
+    }
+
+    #[test]
+    fn table_view_has_a_column_per_declared_attr() {
+        let (_, et) = travel_manifest();
+        let mut view = travel_manifest().0;
+        view.kind = "table".into();
+        let Rendered::Table(v) = dispatch(&view, &et, &trips()) else {
+            panic!("expected table");
+        };
+        assert!(v.columns.contains(&"latitude".to_string()));
+        assert_eq!(v.rows.len(), 2);
+        assert_eq!(v.rows[0].id, "t1");
+    }
+
+    #[test]
+    fn calendar_view_infers_the_date_attr_and_sorts_ascending() {
+        let (_, et) = travel_manifest();
+        let mut view = travel_manifest().0;
+        view.kind = "calendar".into();
+        let Rendered::Calendar(v) = dispatch(&view, &et, &trips()) else {
+            panic!("expected calendar");
+        };
+        assert_eq!(v.date_field.as_deref(), Some("start"));
+        assert_eq!(v.entries[0].id, "t2", "earlier date sorts first");
+    }
+
+    #[test]
+    fn gallery_view_finds_an_image_attr_and_honestly_degrades_without_one() {
+        let (_, et) = travel_manifest();
+        let mut view = travel_manifest().0;
+        view.kind = "gallery".into();
+        let Rendered::Gallery(v) = dispatch(&view, &et, &trips()) else {
+            panic!("expected gallery");
+        };
+        assert_eq!(v.cards[0].image.as_deref(), Some("kyoto.jpg"));
+        assert_eq!(v.cards[1].image, None, "no cover attr on this entity");
+    }
+
+    #[test]
+    fn timeline_view_sorts_by_inferred_date() {
+        let (_, et) = travel_manifest();
+        let mut view = travel_manifest().0;
+        view.kind = "timeline".into();
+        let Rendered::Timeline(v) = dispatch(&view, &et, &trips()) else {
+            panic!("expected timeline");
+        };
+        assert_eq!(v.entries[0].id, "t2");
+    }
+
+    #[test]
+    fn map_view_renders_coordinates_as_text_not_a_fake_map() {
+        let (_, et) = travel_manifest();
+        let mut view = travel_manifest().0;
+        view.kind = "map".into();
+        let Rendered::Map(v) = dispatch(&view, &et, &trips()) else {
+            panic!("expected map");
+        };
+        assert_eq!(
+            v.entries.iter().find(|e| e.id == "t1").unwrap().location,
+            "35.0, 135.7"
+        );
     }
 
     #[test]

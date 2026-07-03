@@ -103,7 +103,10 @@ impl Element for TerminalElement {
         cx: &mut App,
     ) -> Self::PrepaintState {
         let theme = cx.theme();
-        let bg = theme.background;
+        // Translucent under the glass theme (see `ui::theme::pane_bg`) so the
+        // window's real macOS vibrancy blur shows through the terminal's base
+        // fill; per-cell glyph runs below stay fully opaque for legibility.
+        let bg = super::super::theme::pane_bg(cx);
         let fg = theme.foreground;
         let caret = theme.caret;
 

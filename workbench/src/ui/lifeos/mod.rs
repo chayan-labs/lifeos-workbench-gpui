@@ -20,14 +20,19 @@ use std::time::Duration;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     div, App, Context, FocusHandle, Focusable, InteractiveElement, IntoElement, MouseButton,
-    ParentElement, Render, ScrollHandle, StatefulInteractiveElement, Styled, Task, Window,
+    ParentElement, Render, ScrollHandle, StatefulInteractiveElement, Styled, StyledImage, Task,
+    Window,
 };
 use gpui_component::{ActiveTheme, StyledExt};
 use serde_json::Value;
 
 use super::api_host::{ApiHost, HostStatus};
+use super::theme::{chrome_bg, pane_bg};
 use crate::manifest::{self, ModuleManifest};
-use model::{dispatch, BoardView, DetailView, ListView, Rendered};
+use model::{
+    dispatch, BoardView, CalendarView, DetailView, GalleryView, ListView, MapView, Rendered,
+    TableView, TimelineView,
+};
 
 const POLL_MS: u64 = 150;
 
@@ -203,7 +208,7 @@ impl LifeOsView {
             .w(gpui::px(220.0))
             .flex_shrink_0()
             .h_full()
-            .bg(cx.theme().sidebar)
+            .bg(chrome_bg(cx))
             .border_r_1()
             .border_color(cx.theme().border)
             .child(section_label("MODULES", cx));
@@ -260,7 +265,7 @@ impl LifeOsView {
             .overflow_y_scroll()
             .track_scroll(&self.content_scroll)
             .p_4()
-            .bg(cx.theme().background);
+            .bg(pane_bg(cx));
 
         let Some(view_idx) = self.view_idx else {
             return base.child(center_hint(
@@ -312,11 +317,89 @@ impl LifeOsView {
             ));
         }
 
+        let quick_create = quick_create_row(module.id.clone(), view.entity_type.clone(), cx);
         match dispatch(view, entity_type, &f.entities) {
-            Rendered::List(v) => base.child(render_list(&v, cx)),
-            Rendered::Board(b) => base.child(render_board(&b, cx)),
-            Rendered::Detail(d) => base.child(render_detail(&d, cx)),
+            Rendered::List(v) => base.child(quick_create).child(render_list(&v, cx)),
+            Rendered::Board(b) => base.child(quick_create).child(render_board(&b, cx)),
+            Rendered::Detail(d) => base.child(render_detail(&d, &f.entities, cx)),
+            Rendered::Table(t) => base.child(quick_create).child(render_table(&t, cx)),
+            Rendered::Calendar(c) => base.child(render_calendar(&c, cx)),
+            Rendered::Gallery(g) => base.child(render_gallery(&g, cx)),
+            Rendered::Timeline(t) => base.child(render_timeline(&t, cx)),
+            Rendered::Map(m) => base.child(render_map(&m, cx)),
         }
+    }
+
+    /// Navigate to a linked entity's detail: pick whatever view in the linked
+    /// module renders `detail` for that entity's type, falling back to the
+    /// first view. Read-only navigation, mirroring `EntityDetailPanel.jsx`'s
+    /// edge list minus edge-creation (upstream has no standalone create form
+    /// for edges either).
+    fn goto_entity(&mut self, module_id: &str, entity_type: &str, cx: &mut Context<Self>) {
+        let Some(module_idx) = self.manifests.iter().position(|m| m.id == module_id) else {
+            return;
+        };
+        let view_idx = self.manifests[module_idx]
+            .views
+            .iter()
+            .position(|v| v.entity_type == entity_type && v.kind == "detail")
+            .or_else(|| {
+                self.manifests[module_idx]
+                    .views
+                    .iter()
+                    .position(|v| v.entity_type == entity_type)
+            });
+        self.module_idx = module_idx;
+        self.view_idx = view_idx;
+        if let Ok(mut f) = self.fetched.lock() {
+            *f = Fetched::default();
+        }
+        if view_idx.is_some() {
+            self.request_view(cx);
+        }
+        cx.notify();
+    }
+
+    /// Quick-create: POST a minimal new entity of the view's type into the
+    /// current module, matching `CommandBar.jsx`'s one entity-create path (not
+    /// a full form system upstream doesn't have either), then refresh once the
+    /// create has actually landed (rather than racing a GET against it).
+    fn quick_create(&mut self, module_id: String, entity_type: String, cx: &mut Context<Self>) {
+        let Some((api, token)) = self.api.ready() else {
+            return;
+        };
+        let key = (self.module_idx, self.view_idx.unwrap_or(0));
+        let Some(uri) = self.fetch_uri(key) else {
+            return;
+        };
+        if let Ok(mut f) = self.fetched.lock() {
+            f.busy = true;
+            f.spawned = true;
+            f.key = key;
+        }
+        let body = serde_json::json!({
+            "module": module_id,
+            "type": entity_type,
+            "title": format!("New {entity_type}"),
+        });
+        let fetched = self.fetched.clone();
+        crate::ui::app::tokio_handle().spawn(async move {
+            let _ = api.post("/api/entity", body, token.as_deref()).await;
+            let response = api.get(&uri, token.as_deref()).await;
+            if let Ok(mut f) = fetched.lock() {
+                if f.key != key {
+                    return;
+                }
+                f.busy = false;
+                f.spawned = false;
+                if response.is_success() {
+                    f.entities = response.body.as_array().cloned().unwrap_or_default();
+                } else {
+                    f.error = Some(format!("api error {}", response.status));
+                }
+            }
+        });
+        self.start_poll(cx);
     }
 }
 
@@ -434,7 +517,39 @@ fn render_board(b: &BoardView, cx: &Context<LifeOsView>) -> impl IntoElement {
         }))
 }
 
-fn render_detail(d: &DetailView, cx: &Context<LifeOsView>) -> impl IntoElement {
+/// A relation surfaced from the fetched entity's own JSON (`edges`/`relations`
+/// - whichever key the API embeds), read-only-navigate rather than
+/// edge-creation (upstream's `EntityDetailPanel.jsx` doesn't have a standalone
+/// create form for edges either). No separate `/api/edge` fetch is made: this
+/// only renders what already came back on the same `/api/entity` response.
+struct Relation {
+    label: String,
+    module: String,
+    entity_type: String,
+}
+
+fn parse_relations(entity: &Value) -> Vec<Relation> {
+    let arr = entity["edges"]
+        .as_array()
+        .or_else(|| entity["relations"].as_array())
+        .cloned()
+        .unwrap_or_default();
+    arr.iter()
+        .filter_map(|r| {
+            Some(Relation {
+                label: r["title"]
+                    .as_str()
+                    .or_else(|| r["label"].as_str())
+                    .unwrap_or("(untitled)")
+                    .to_string(),
+                module: r["module"].as_str()?.to_string(),
+                entity_type: r["type"].as_str()?.to_string(),
+            })
+        })
+        .collect()
+}
+
+fn render_detail(d: &DetailView, entities: &[Value], cx: &Context<LifeOsView>) -> impl IntoElement {
     let fields = div()
         .v_flex()
         .gap_1()
@@ -464,7 +579,293 @@ fn render_detail(d: &DetailView, cx: &Context<LifeOsView>) -> impl IntoElement {
             .child(div().h(gpui::px(1.0)).w_full().bg(cx.theme().border))
             .child(render_markdown(&d.body, cx));
     }
+
+    let relations = entities.first().map(parse_relations).unwrap_or_default();
+    if !relations.is_empty() {
+        root = root
+            .child(div().h(gpui::px(1.0)).w_full().bg(cx.theme().border))
+            .child(section_label("RELATIONS", cx))
+            .child(
+                div()
+                    .v_flex()
+                    .gap_1()
+                    .children(relations.into_iter().enumerate().map(|(i, r)| {
+                        let (module, entity_type) = (r.module.clone(), r.entity_type.clone());
+                        div()
+                            .id(("relation", i))
+                            .h_flex()
+                            .items_center()
+                            .justify_between()
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .text_sm()
+                            .text_color(cx.theme().foreground)
+                            .child(r.label)
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(format!("{} \u{00B7} {}", r.module, r.entity_type)),
+                            )
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, _, cx| {
+                                    this.goto_entity(&module, &entity_type, cx);
+                                }),
+                            )
+                    })),
+            );
+    }
     root
+}
+
+/// A small "+ New" affordance for list/table/board headers, matching
+/// `CommandBar.jsx`'s one entity-create path.
+fn quick_create_row(
+    module_id: String,
+    entity_type: String,
+    cx: &Context<LifeOsView>,
+) -> impl IntoElement {
+    div().h_flex().justify_end().w_full().pb_2().child(
+        div()
+            .id("quick-create")
+            .px_2()
+            .py_0p5()
+            .rounded_md()
+            .cursor_pointer()
+            .text_xs()
+            .bg(cx.theme().accent)
+            .text_color(cx.theme().accent_foreground)
+            .child("+ New")
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    this.quick_create(module_id.clone(), entity_type.clone(), cx);
+                }),
+            ),
+    )
+}
+
+fn render_table(t: &TableView, cx: &Context<LifeOsView>) -> impl IntoElement {
+    let col_basis = 1.0 / t.columns.len().max(1) as f32;
+    let header = div()
+        .h_flex()
+        .w_full()
+        .px_2()
+        .py_1()
+        .gap_2()
+        .border_b_1()
+        .border_color(cx.theme().border)
+        .text_xs()
+        .font_semibold()
+        .text_color(cx.theme().muted_foreground)
+        .children(t.columns.iter().map(|c| {
+            div()
+                .flex_basis(gpui::relative(col_basis))
+                .min_w_0()
+                .child(c.clone())
+        }));
+    let rows = div()
+        .v_flex()
+        .w_full()
+        .children(t.rows.iter().enumerate().map(|(i, row)| {
+            div()
+                .h_flex()
+                .w_full()
+                .px_2()
+                .py_1()
+                .gap_2()
+                .text_sm()
+                .when(i % 2 == 1, |d| d.bg(cx.theme().secondary))
+                .text_color(cx.theme().foreground)
+                .children(row.cells.iter().map(|c| {
+                    div()
+                        .flex_basis(gpui::relative(col_basis))
+                        .min_w_0()
+                        .child(c.clone())
+                }))
+        }));
+    div().v_flex().w_full().child(header).child(rows)
+}
+
+/// A 7-column month grid: entries bucketed by day-of-month within their date
+/// string's first matching prefix. Plain gpui divs, no external calendar
+/// widget - each cell lists that day's entries as small chips.
+fn render_calendar(c: &CalendarView, cx: &Context<LifeOsView>) -> impl IntoElement {
+    if c.date_field.is_none() {
+        return div().v_flex().gap_1().child(center_hint(
+            "No date field",
+            "this entity type has no date/datetime attr to bucket by",
+            cx,
+        ));
+    }
+    let mut by_month: std::collections::BTreeMap<String, Vec<&model::CalendarEntry>> =
+        std::collections::BTreeMap::new();
+    for e in &c.entries {
+        let month = e.date.get(0..7).unwrap_or(&e.date).to_string();
+        by_month.entry(month).or_default().push(e);
+    }
+    div()
+        .v_flex()
+        .gap_4()
+        .w_full()
+        .children(by_month.into_iter().map(|(month, entries)| {
+            div()
+                .v_flex()
+                .gap_1()
+                .child(
+                    div()
+                        .font_semibold()
+                        .text_sm()
+                        .text_color(cx.theme().foreground)
+                        .child(month),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_2()
+                        .children(entries.into_iter().map(|e| {
+                            div()
+                                .v_flex()
+                                .gap_0p5()
+                                .p_2()
+                                .w(gpui::px(140.0))
+                                .rounded_md()
+                                .bg(cx.theme().secondary)
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(e.date.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().foreground)
+                                        .child(e.title.clone()),
+                                )
+                        })),
+                )
+        }))
+}
+
+fn render_gallery(g: &GalleryView, cx: &Context<LifeOsView>) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_wrap()
+        .gap_3()
+        .w_full()
+        .children(g.cards.iter().map(|card| {
+            let mut cell = div()
+                .v_flex()
+                .w(gpui::px(160.0))
+                .h(gpui::px(140.0))
+                .rounded_md()
+                .overflow_hidden()
+                .bg(cx.theme().secondary)
+                .border_1()
+                .border_color(cx.theme().border);
+            cell = match &card.image {
+                Some(path) => cell.child(
+                    gpui::img(path.clone())
+                        .w_full()
+                        .h(gpui::px(100.0))
+                        .object_fit(gpui::ObjectFit::Cover),
+                ),
+                None => cell.v_flex().items_center().justify_center().child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("no image"),
+                ),
+            };
+            cell.child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .text_sm()
+                    .text_color(cx.theme().foreground)
+                    .child(card.title.clone()),
+            )
+        }))
+}
+
+fn render_timeline(t: &TimelineView, cx: &Context<LifeOsView>) -> impl IntoElement {
+    div()
+        .v_flex()
+        .gap_0()
+        .w_full()
+        .children(t.entries.iter().map(|e| {
+            div()
+                .h_flex()
+                .gap_3()
+                .items_start()
+                .child(
+                    div()
+                        .w(gpui::px(96.0))
+                        .flex_shrink_0()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(e.date.clone()),
+                )
+                .child(div().w(gpui::px(2.0)).self_stretch().bg(cx.theme().border))
+                .child(
+                    div()
+                        .v_flex()
+                        .pb_3()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().foreground)
+                                .child(e.title.clone()),
+                        )
+                        .when(!e.subtitle.is_empty(), |d| {
+                            d.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(e.subtitle.clone()),
+                            )
+                        }),
+                )
+        }))
+}
+
+/// A sorted/grouped location list with coordinates/address as text - not a
+/// live map widget (a real interactive map/tile provider is an escape-hatch
+/// case, not something to fake with a broken embed).
+fn render_map(m: &MapView, cx: &Context<LifeOsView>) -> impl IntoElement {
+    if m.entries.is_empty() {
+        return div().child(center_hint(
+            "No location data",
+            "this entity type has no lat/lng or address attr",
+            cx,
+        ));
+    }
+    div()
+        .v_flex()
+        .gap_1()
+        .w_full()
+        .children(m.entries.iter().map(|e| {
+            div()
+                .h_flex()
+                .items_center()
+                .justify_between()
+                .px_2()
+                .py_1()
+                .text_sm()
+                .text_color(cx.theme().foreground)
+                .child(e.title.clone())
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(e.location.clone()),
+                )
+        }))
 }
 
 /// A deliberately small markdown renderer for detail bodies: headings, bullets,

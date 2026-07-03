@@ -69,20 +69,28 @@ impl Default for EditorConfig {
     }
 }
 
-/// Preferred colour mode.
+/// Preferred colour mode. `Glass` layers a macOS window-vibrancy blur behind
+/// every pane on top of the dark palette (see [`super::theme`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ThemePref {
     #[default]
     Dark,
     Light,
+    Glass,
 }
 
 impl ThemePref {
     pub fn parse(name: &str) -> Self {
         match name.trim().to_ascii_lowercase().as_str() {
             "light" => ThemePref::Light,
+            "glass" | "macos-glass" | "macos_glass" => ThemePref::Glass,
             _ => ThemePref::Dark,
         }
+    }
+
+    /// Whether the whole-app macOS vibrancy blur should be enabled.
+    pub fn is_glass(self) -> bool {
+        matches!(self, ThemePref::Glass)
     }
 }
 
@@ -95,12 +103,19 @@ pub struct FontConfig {
     pub mono_size: Option<f32>,
 }
 
+/// Agent pane configuration: an explicit command overrides auto-detection.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AgentConfig {
+    pub command: Option<String>,
+}
+
 /// Top-level resolved configuration.
 #[derive(Clone, Debug, Default)]
 pub struct Config {
     pub editor: EditorConfig,
     pub theme: ThemePref,
     pub font: FontConfig,
+    pub agent: AgentConfig,
 }
 
 impl Config {
@@ -152,6 +167,7 @@ pub struct LuaConfig {
     pub mono_family: Option<String>,
     pub ui_size: Option<f32>,
     pub mono_size: Option<f32>,
+    pub agent_command: Option<String>,
 }
 
 impl LuaConfig {
@@ -186,6 +202,9 @@ impl LuaConfig {
         if self.mono_size.is_some() {
             config.font.mono_size = self.mono_size;
         }
+        if self.agent_command.is_some() {
+            config.agent.command = self.agent_command;
+        }
     }
 }
 
@@ -216,6 +235,9 @@ pub fn parse_lua(src: &str) -> Result<LuaConfig, String> {
         out.mono_family = get_str(&font, "mono_family");
         out.ui_size = get_num(&font, "size").map(|n| n as f32);
         out.mono_size = get_num(&font, "mono_size").map(|n| n as f32);
+    }
+    if let Some(agent) = sub(&root, "agent") {
+        out.agent_command = get_str(&agent, "command");
     }
     Ok(out)
 }
@@ -266,6 +288,94 @@ pub fn config_dir() -> Option<PathBuf> {
 /// The `config.lua` path inside [`config_dir`].
 pub fn config_file_path() -> Option<PathBuf> {
     config_dir().map(|d| d.join("config.lua"))
+}
+
+/// Persist one `section.key = value` into `config.lua`, used by the Settings
+/// pane and the agent picker. This is a minimal line-based textual upsert
+/// (find the section table, replace the key's line or insert one), not a full
+/// Lua AST round-trip - untouched keys and the user's own comments survive.
+pub fn write_back(section: &str, key: &str, value: &str) -> std::io::Result<()> {
+    let Some(path) = config_file_path() else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no config directory (HOME unset)",
+        ));
+    };
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let existing = std::fs::read_to_string(&path).unwrap_or_else(|_| default_skeleton());
+    let updated = upsert_kv(&existing, section, key, value);
+    std::fs::write(&path, updated)
+}
+
+fn default_skeleton() -> String {
+    "-- lifeos-workbench config\nreturn {\n}\n".to_string()
+}
+
+/// Render a Lua value literal for `value`: booleans/numbers unquoted, anything
+/// else as a quoted string.
+fn lua_literal(value: &str) -> String {
+    if value == "true" || value == "false" || value.parse::<f64>().is_ok() {
+        value.to_string()
+    } else {
+        format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+    }
+}
+
+/// Upsert `section.key = value` into Lua source `src`, preserving everything
+/// else. Assumes the flat `return { section = { key = val, ... }, ... }`
+/// shape this module always generates/reads - not a general Lua formatter.
+fn upsert_kv(src: &str, section: &str, key: &str, value: &str) -> String {
+    let mut lines: Vec<String> = src.lines().map(|l| l.to_string()).collect();
+    let new_line = format!("        {key} = {},", lua_literal(value));
+
+    let section_start = lines.iter().position(|l| {
+        let t = l.trim();
+        t.starts_with(&format!("{section} = {{")) || t.starts_with(&format!("{section}={{"))
+    });
+
+    match section_start {
+        Some(start) => {
+            let mut depth = 0i32;
+            let mut end = start;
+            for (i, l) in lines.iter().enumerate().skip(start) {
+                depth += l.matches('{').count() as i32;
+                depth -= l.matches('}').count() as i32;
+                if depth == 0 && i > start {
+                    end = i;
+                    break;
+                }
+            }
+            let key_line = lines[(start + 1)..end].iter().position(|l| {
+                let t = l.trim_start();
+                t.starts_with(&format!("{key} ")) || t.starts_with(&format!("{key}="))
+            });
+            match key_line {
+                Some(offset) => lines[start + 1 + offset] = new_line,
+                None => lines.insert(start + 1, new_line),
+            }
+        }
+        None => {
+            let insert_at = lines
+                .iter()
+                .rposition(|l| l.trim() == "}")
+                .unwrap_or(lines.len());
+            for (offset, l) in [
+                format!("    {section} = {{"),
+                new_line,
+                "    },".to_string(),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                lines.insert(insert_at + offset, l);
+            }
+        }
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
 }
 
 #[cfg(test)]
@@ -335,5 +445,61 @@ mod tests {
     fn empty_or_bare_table_yields_all_defaults() {
         let parsed = parse_lua("return {}").unwrap();
         assert_eq!(parsed, LuaConfig::default());
+    }
+
+    #[test]
+    fn glass_theme_parses_from_either_spelling() {
+        assert_eq!(ThemePref::parse("glass"), ThemePref::Glass);
+        assert_eq!(ThemePref::parse("macos-glass"), ThemePref::Glass);
+        assert!(ThemePref::Glass.is_glass());
+        assert!(!ThemePref::Dark.is_glass());
+    }
+
+    #[test]
+    fn agent_command_parses_from_lua() {
+        let parsed = parse_lua(r#"return { agent = { command = "codex" } }"#).unwrap();
+        assert_eq!(parsed.agent_command.as_deref(), Some("codex"));
+        let mut config = Config::default();
+        config.apply_lua(r#"return { agent = { command = "codex" } }"#);
+        assert_eq!(config.agent.command.as_deref(), Some("codex"));
+    }
+
+    #[test]
+    fn write_back_inserts_a_new_section_into_a_bare_skeleton() {
+        let src = default_skeleton();
+        let updated = upsert_kv(&src, "agent", "command", "claude");
+        let parsed = parse_lua(&updated).expect("round-trips through parse_lua");
+        assert_eq!(parsed.agent_command.as_deref(), Some("claude"));
+    }
+
+    #[test]
+    fn write_back_replaces_an_existing_key_without_disturbing_others() {
+        let src = r#"return {
+    editor = {
+        engine = "helix",
+    },
+    agent = {
+        command = "claude",
+    },
+}
+"#;
+        let updated = upsert_kv(src, "agent", "command", "codex");
+        let parsed = parse_lua(&updated).expect("round-trips");
+        assert_eq!(parsed.agent_command.as_deref(), Some("codex"));
+        assert_eq!(
+            parsed.engine.as_deref(),
+            Some("helix"),
+            "untouched key survives"
+        );
+    }
+
+    #[test]
+    fn write_back_bool_and_number_values_stay_unquoted() {
+        let updated = upsert_kv(&default_skeleton(), "editor", "soft_wrap", "true");
+        let parsed = parse_lua(&updated).unwrap();
+        assert_eq!(parsed.soft_wrap, Some(true));
+        let updated = upsert_kv(&default_skeleton(), "font", "size", "14");
+        let parsed = parse_lua(&updated).unwrap();
+        assert_eq!(parsed.ui_size, Some(14.0));
     }
 }

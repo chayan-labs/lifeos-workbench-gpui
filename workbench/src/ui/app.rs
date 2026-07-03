@@ -19,6 +19,7 @@ use tokio::runtime::{Handle, Runtime};
 use super::actions::{self, Quit};
 use super::config::{self, Config, ThemePref};
 use super::menu;
+use super::theme::GlassMode;
 use super::workspace_view::WorkspaceView;
 
 /// The process-wide tokio runtime backing every async surface. Kept alive for
@@ -51,7 +52,13 @@ pub fn run() {
         if let Some(dir) = config::config_dir() {
             super::import::run_first_launch_import(&dir);
         }
-        apply_config(&Config::load(), cx);
+        let config = Config::load();
+        apply_config(&config, cx);
+
+        // Published once so every pane/element can read glass-on-ness (via
+        // `ui::theme::pane_bg`/`glass_active`) without threading `Config`
+        // through every constructor.
+        cx.set_global(GlassMode(config.theme.is_glass()));
 
         // Commands: keymap + app-global handlers + the native menu bar.
         actions::bind_keys(cx);
@@ -60,11 +67,20 @@ pub fn run() {
         cx.activate(true);
 
         let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
+        // The glass theme uses gpui's real macOS `NSVisualEffectView`-backed
+        // window blur (not a fake) - applies to the whole window, so every
+        // pane's translucent `pane_bg()` shows the same backdrop through it.
+        let window_background = if config.theme.is_glass() {
+            WindowBackgroundAppearance::Blurred
+        } else {
+            WindowBackgroundAppearance::Opaque
+        };
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             // Custom in-window title bar (hides the native one) so the menu +
             // tab strip live in the chrome, Zed-style.
             titlebar: Some(TitleBar::title_bar_options()),
+            window_background,
             ..Default::default()
         };
 
@@ -78,10 +94,12 @@ pub fn run() {
 
 /// Apply the visual parts of the resolved config: theme mode, then any font
 /// overrides on top of the mode's theme. Editor engine/options are consumed
-/// separately by the editor view.
-fn apply_config(config: &Config, cx: &mut App) {
+/// separately by the editor view. `pub(crate)` so the Settings pane can
+/// re-apply a hot-appliable change (theme mode, fonts) immediately after the
+/// user edits it, without waiting for a relaunch.
+pub(crate) fn apply_config(config: &Config, cx: &mut App) {
     let mode = match config.theme {
-        ThemePref::Dark => ThemeMode::Dark,
+        ThemePref::Dark | ThemePref::Glass => ThemeMode::Dark,
         ThemePref::Light => ThemeMode::Light,
     };
     Theme::change(mode, None, cx);

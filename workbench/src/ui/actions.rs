@@ -47,6 +47,18 @@ actions!(
         OpenLifeOs,
         /// Open recall (semantic) search.
         OpenRecall,
+        /// Open the Settings pane.
+        OpenSettings,
+        /// Open the Memory pane.
+        OpenMemory,
+        /// Open the Trading pane.
+        OpenTrading,
+        /// Open the VCS pane.
+        OpenVcs,
+        /// Open the Jobs/Pipelines pane.
+        OpenJobs,
+        /// Open the Self-extension pane.
+        OpenSelfExtend,
     ]
 );
 
@@ -72,5 +84,6 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-3", FocusAgent, None),
         KeyBinding::new("cmd-l", OpenLifeOs, None),
         KeyBinding::new("cmd-shift-f", OpenRecall, None),
+        KeyBinding::new("cmd-,", OpenSettings, None),
     ]);
 }
