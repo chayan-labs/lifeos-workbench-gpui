@@ -1,0 +1,1005 @@
+//! Root workspace view: the IDE chrome shell.
+//!
+//! A custom `TitleBar` (brand + center-mode strip), a clickable tab strip, a
+//! resizable file-tree sidebar, a center that tiles the active tab's pane tree,
+//! an optional terminal dock, and a `StatusBar` - all themed via
+//! `gpui-component` and mouse-driven. Every command (menu, keymap, buttons,
+//! palette) funnels through the single [`WorkspaceView::run_command`], so a
+//! shortcut, a click, and a palette pick share one code path.
+//!
+//! Pane leaves show a labelled placeholder for the active mode for now; the
+//! editor, agent, and Life OS views replace that content in later steps. The
+//! tiling engine, tabs, sidebar, and palette are real.
+
+use std::path::{Path, PathBuf};
+
+use gpui::prelude::FluentBuilder;
+use gpui::{
+    div, px, AnyElement, AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
+    KeyDownEvent, MouseButton, ParentElement, Render, StatefulInteractiveElement, Styled, Window,
+};
+use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable};
+use gpui_component::status_bar::StatusBar;
+use gpui_component::{ActiveTheme, Sizable, StyledExt, TitleBar};
+
+use super::actions::{
+    About, ClosePane, CloseTab, CommandPalette, FocusAgent, FocusEditor, FocusNextPane,
+    FocusPrevPane, FocusTerminal, NewTab, OpenFile, OpenJobs, OpenLifeOs, OpenMemory, OpenRecall,
+    OpenSelfExtend, OpenSettings, OpenTrading, OpenVcs, SplitDown, SplitRight, ToggleDock,
+    ToggleSidebar,
+};
+use super::agent::AgentView;
+use super::api_host::ApiHost;
+use super::commands::{commands, filter, CommandId};
+use super::config::Config;
+use super::editor::EditorView;
+use super::file_tree::FileTree;
+use super::jobs::JobsView;
+use super::lifeos::LifeOsView;
+use super::memory::MemoryView;
+use super::panes::{Layout, LayoutNode, PaneId, SplitDir};
+use super::recall::RecallView;
+use super::selfextend::SelfExtendView;
+use super::settings::SettingsView;
+use super::terminal::TerminalView;
+use super::theme::{chrome_bg, glass_edge, pane_bg};
+use super::trading::TradingView;
+use super::vcs::VcsView;
+
+/// Which surface a pane currently shows. Real content arrives per mode in later
+/// steps; for now each leaf renders a labelled placeholder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    Editor,
+    Terminal,
+    Agent,
+    LifeOs,
+    Recall,
+    Settings,
+    Memory,
+    Trading,
+    Vcs,
+    Jobs,
+    SelfExtend,
+}
+
+impl Mode {
+    fn label(self) -> &'static str {
+        match self {
+            Mode::Editor => "Editor",
+            Mode::Terminal => "Terminal",
+            Mode::Agent => "Agent",
+            Mode::LifeOs => "Life OS",
+            Mode::Recall => "Recall",
+            Mode::Settings => "Settings",
+            Mode::Memory => "Memory",
+            Mode::Trading => "Trading",
+            Mode::Vcs => "VCS",
+            Mode::Jobs => "Jobs",
+            Mode::SelfExtend => "Self-extend",
+        }
+    }
+
+    /// The startup pane, overridable via `WB_START_MODE` (editor by default).
+    /// Handy for opening straight into a pane for screenshots / E2E without
+    /// driving the menu.
+    fn from_env() -> Self {
+        match std::env::var("WB_START_MODE")
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "terminal" | "term" => Mode::Terminal,
+            "agent" => Mode::Agent,
+            "lifeos" | "life-os" | "os" => Mode::LifeOs,
+            "recall" | "search" => Mode::Recall,
+            "settings" => Mode::Settings,
+            "memory" => Mode::Memory,
+            "trading" => Mode::Trading,
+            "vcs" => Mode::Vcs,
+            "jobs" => Mode::Jobs,
+            "selfextend" | "self-extend" => Mode::SelfExtend,
+            _ => Mode::Editor,
+        }
+    }
+}
+
+/// The root view installed under `gpui_component::Root`.
+pub struct WorkspaceView {
+    sidebar_open: bool,
+    dock_open: bool,
+    mode: Mode,
+    status_hint: String,
+    terminal: Entity<TerminalView>,
+    editor: Entity<EditorView>,
+    lifeos: Entity<LifeOsView>,
+    agent: Entity<AgentView>,
+    recall: Entity<RecallView>,
+    settings: Entity<SettingsView>,
+    memory: Entity<MemoryView>,
+    trading: Entity<TradingView>,
+    vcs: Entity<VcsView>,
+    jobs: Entity<JobsView>,
+    selfextend: Entity<SelfExtendView>,
+    layout: Layout,
+    file_tree: FileTree,
+    selected_file: Option<PathBuf>,
+    // Command palette (inline overlay state).
+    palette_open: bool,
+    palette_query: String,
+    palette_selected: usize,
+    palette_focus: FocusHandle,
+}
+
+impl WorkspaceView {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let config = Config::load();
+        // Stand up the in-process lifeos-api once; the Life OS and Recall panes
+        // share the handle and read whatever state the bootstrap has reached.
+        let api = ApiHost::new();
+        api.bootstrap(&super::app::tokio_handle());
+        let terminal = cx.new(|cx| TerminalView::new(window, cx));
+        let editor = cx.new(|cx| EditorView::new(config.editor, window, cx));
+        let lifeos = cx.new(|cx| LifeOsView::new(api.clone(), window, cx));
+        let agent = cx.new(|cx| AgentView::new(&config, window, cx));
+        let recall = cx.new(|cx| RecallView::new(api.clone(), window, cx));
+        let settings = cx.new(|cx| SettingsView::new(&config, window, cx));
+        let memory = cx.new(|cx| MemoryView::new(api.clone(), window, cx));
+        let trading = cx.new(|cx| TradingView::new(api.clone(), window, cx));
+        let vcs = cx.new(|cx| VcsView::new(api.clone(), window, cx));
+        let jobs = cx.new(|cx| JobsView::new(api.clone(), window, cx));
+        let selfextend = cx.new(|cx| SelfExtendView::new(api.clone(), window, cx));
+        let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let mode = Mode::from_env();
+
+        // Focus the initial mode's pane on startup. This is not just a nicety:
+        // gpui dispatches native-menu actions along the focused element's
+        // ancestor chain, so with nothing focused the workspace's `on_action`
+        // handlers sit off the dispatch path and menu items silently no-op.
+        // Focusing a pane (a descendant of the workspace root) puts the root's
+        // handlers back in the path so menu items fire. (Quit works regardless
+        // because it is a global `cx.on_action`.)
+        let init_focus = match mode {
+            Mode::Editor => editor.read(cx).handle(cx),
+            Mode::Terminal => terminal.read(cx).handle(),
+            Mode::Agent => agent.read(cx).handle(),
+            Mode::LifeOs => lifeos.read(cx).handle(),
+            Mode::Recall => recall.read(cx).handle(),
+            Mode::Settings => settings.read(cx).handle(),
+            Mode::Memory => memory.read(cx).handle(),
+            Mode::Trading => trading.read(cx).handle(),
+            Mode::Vcs => vcs.read(cx).handle(),
+            Mode::Jobs => jobs.read(cx).handle(),
+            Mode::SelfExtend => selfextend.read(cx).handle(),
+        };
+        window.focus(&init_focus, cx);
+
+        Self {
+            sidebar_open: true,
+            dock_open: true,
+            mode,
+            status_hint: "ready".to_string(),
+            terminal,
+            editor,
+            lifeos,
+            agent,
+            recall,
+            settings,
+            memory,
+            trading,
+            vcs,
+            jobs,
+            selfextend,
+            layout: Layout::new(),
+            file_tree: FileTree::open(&root),
+            selected_file: None,
+            palette_open: false,
+            palette_query: String::new(),
+            palette_selected: 0,
+            palette_focus: cx.focus_handle(),
+        }
+    }
+
+    // ---- the one command handler everything funnels through ----
+
+    fn run_command(&mut self, id: CommandId, window: &mut Window, cx: &mut Context<Self>) {
+        use CommandId::*;
+        match id {
+            SplitRight => {
+                self.layout = self.layout.split_focused(SplitDir::Horizontal).0;
+                self.hint("split right");
+            }
+            SplitDown => {
+                self.layout = self.layout.split_focused(SplitDir::Vertical).0;
+                self.hint("split down");
+            }
+            ClosePane => match self.layout.close_focused() {
+                Some(next) => {
+                    self.layout = next;
+                    self.hint("closed pane");
+                }
+                None => self.hint("last pane - use Quit to exit"),
+            },
+            FocusNext => {
+                self.layout = self.layout.focus_next();
+                self.hint("focus next");
+            }
+            FocusPrev => {
+                self.layout = self.layout.focus_prev();
+                self.hint("focus previous");
+            }
+            NewTab => {
+                self.layout = self.layout.new_tab().0;
+                self.hint("new tab");
+            }
+            NextTab => {
+                self.layout = self.layout.next_tab();
+                self.hint("next tab");
+            }
+            ToggleEditor => {
+                self.mode = if self.mode == Mode::Editor {
+                    Mode::Terminal
+                } else {
+                    Mode::Editor
+                };
+                self.hint(self.mode.label());
+            }
+            FocusEditor => {
+                self.set_mode(Mode::Editor);
+                let handle = self.editor.read(cx).handle(cx);
+                window.focus(&handle, cx);
+            }
+            FocusTerminal => {
+                self.dock_open = true;
+                self.set_mode(Mode::Terminal);
+                let handle = self.terminal.read(cx).handle();
+                window.focus(&handle, cx);
+            }
+            ToggleSidebar => {
+                self.sidebar_open = !self.sidebar_open;
+                self.hint(&format!("sidebar {}", shown(self.sidebar_open)));
+            }
+            ToggleDock => {
+                self.dock_open = !self.dock_open;
+                self.hint(&format!("terminal dock {}", shown(self.dock_open)));
+            }
+            OpenFilePicker => self.hint("fuzzy picker (todo)"),
+            OpenAgentPane => {
+                self.set_mode(Mode::Agent);
+                let handle = self.agent.read(cx).handle();
+                window.focus(&handle, cx);
+            }
+            OpenSearchPane => {
+                self.set_mode(Mode::Recall);
+                let handle = self.recall.read(cx).handle();
+                window.focus(&handle, cx);
+            }
+            OpenLifeOsPane => {
+                self.set_mode(Mode::LifeOs);
+                let handle = self.lifeos.read(cx).handle();
+                window.focus(&handle, cx);
+            }
+            OpenSettingsPane => {
+                self.set_mode(Mode::Settings);
+                let handle = self.settings.read(cx).handle();
+                window.focus(&handle, cx);
+            }
+            OpenMemoryPane => {
+                self.set_mode(Mode::Memory);
+                let handle = self.memory.read(cx).handle();
+                window.focus(&handle, cx);
+            }
+            OpenTradingPane => {
+                self.set_mode(Mode::Trading);
+                let handle = self.trading.read(cx).handle();
+                window.focus(&handle, cx);
+            }
+            OpenVcsPane => {
+                self.set_mode(Mode::Vcs);
+                let handle = self.vcs.read(cx).handle();
+                window.focus(&handle, cx);
+            }
+            OpenJobsPane => {
+                self.set_mode(Mode::Jobs);
+                let handle = self.jobs.read(cx).handle();
+                window.focus(&handle, cx);
+            }
+            OpenSelfExtendPane => {
+                self.set_mode(Mode::SelfExtend);
+                let handle = self.selfextend.read(cx).handle();
+                window.focus(&handle, cx);
+            }
+            Quit => window.dispatch_action(Box::new(super::actions::Quit), cx),
+        }
+        cx.notify();
+    }
+
+    fn set_mode(&mut self, mode: Mode) {
+        self.mode = mode;
+        self.status_hint = mode.label().to_lowercase();
+    }
+
+    /// Open a file: load it into the editor, switch to Editor mode, and focus
+    /// the editor. Shared by the sidebar click and (later) the fuzzy picker.
+    fn open_file(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        self.selected_file = Some(path.to_path_buf());
+        self.editor
+            .update(cx, |editor, cx| editor.open_path(path, window, cx));
+        self.mode = Mode::Editor;
+        let rel = path
+            .strip_prefix(&self.file_tree.root)
+            .unwrap_or(path)
+            .display()
+            .to_string();
+        self.hint(&format!("edit: {rel}"));
+        let handle = self.editor.read(cx).handle(cx);
+        window.focus(&handle, cx);
+    }
+
+    fn hint(&mut self, msg: &str) {
+        self.status_hint = msg.to_string();
+    }
+
+    // ---- action wrappers (menu / keymap / buttons all dispatch these) ----
+
+    fn on_toggle_sidebar(&mut self, _: &ToggleSidebar, w: &mut Window, cx: &mut Context<Self>) {
+        self.run_command(CommandId::ToggleSidebar, w, cx);
+    }
+    fn on_toggle_dock(&mut self, _: &ToggleDock, w: &mut Window, cx: &mut Context<Self>) {
+        self.run_command(CommandId::ToggleDock, w, cx);
+    }
+    fn on_focus_editor(&mut self, _: &FocusEditor, w: &mut Window, cx: &mut Context<Self>) {
+        self.run_command(CommandId::FocusEditor, w, cx);
+    }
+    fn on_focus_terminal(&mut self, _: &FocusTerminal, w: &mut Window, cx: &mut Context<Self>) {
+        self.run_command(CommandId::FocusTerminal, w, cx);
+    }
+    fn on_focus_agent(&mut self, _: &FocusAgent, w: &mut Window, cx: &mut Context<Self>) {
+        self.run_command(CommandId::OpenAgentPane, w, cx);
+    }
+    fn on_open_lifeos(&mut self, _: &OpenLifeOs, w: &mut Window, cx: &mut Context<Self>) {
+        self.run_command(CommandId::OpenLifeOsPane, w, cx);
+    }
+    fn on_open_recall(&mut self, _: &OpenRecall, w: &mut Window, cx: &mut Context<Self>) {
+        self.run_command(CommandId::OpenSearchPane, w, cx);
+    }
+    fn on_open_settings(&mut self, _: &OpenSettings, w: &mut Window, cx: &mut Context<Self>) {
+        self.run_command(CommandId::OpenSettingsPane, w, cx);
+    }
+    fn on_open_memory(&mut self, _: &OpenMemory, w: &mut Window, cx: &mut Context<Self>) {
+        self.run_command(CommandId::OpenMemoryPane, w, cx);
+    }
+    fn on_open_trading(&mut self, _: &OpenTrading, w: &mut Window, cx: &mut Context<Self>) {
+        self.run_command(CommandId::OpenTradingPane, w, cx);
+    }
+    fn on_open_vcs(&mut self, _: &OpenVcs, w: &mut Window, cx: &mut Context<Self>) {
+        self.run_command(CommandId::OpenVcsPane, w, cx);
+    }
+    fn on_open_jobs(&mut self, _: &OpenJobs, w: &mut Window, cx: &mut Context<Self>) {
+        self.run_command(CommandId::OpenJobsPane, w, cx);
+    }
+    fn on_open_selfextend(&mut self, _: &OpenSelfExtend, w: &mut Window, cx: &mut Context<Self>) {
+        self.run_command(CommandId::OpenSelfExtendPane, w, cx);
+    }
+    fn on_new_tab(&mut self, _: &NewTab, w: &mut Window, cx: &mut Context<Self>) {
+        self.run_command(CommandId::NewTab, w, cx);
+    }
+    fn on_close_tab(&mut self, _: &CloseTab, w: &mut Window, cx: &mut Context<Self>) {
+        self.run_command(CommandId::ClosePane, w, cx);
+    }
+    fn on_split_right(&mut self, _: &SplitRight, w: &mut Window, cx: &mut Context<Self>) {
+        self.run_command(CommandId::SplitRight, w, cx);
+    }
+    fn on_split_down(&mut self, _: &SplitDown, w: &mut Window, cx: &mut Context<Self>) {
+        self.run_command(CommandId::SplitDown, w, cx);
+    }
+    fn on_close_pane(&mut self, _: &ClosePane, w: &mut Window, cx: &mut Context<Self>) {
+        self.run_command(CommandId::ClosePane, w, cx);
+    }
+    fn on_focus_next_pane(&mut self, _: &FocusNextPane, w: &mut Window, cx: &mut Context<Self>) {
+        self.run_command(CommandId::FocusNext, w, cx);
+    }
+    fn on_focus_prev_pane(&mut self, _: &FocusPrevPane, w: &mut Window, cx: &mut Context<Self>) {
+        self.run_command(CommandId::FocusPrev, w, cx);
+    }
+    fn on_open_file(&mut self, _: &OpenFile, w: &mut Window, cx: &mut Context<Self>) {
+        self.run_command(CommandId::OpenFilePicker, w, cx);
+    }
+    fn on_about(&mut self, _: &About, _: &mut Window, cx: &mut Context<Self>) {
+        self.hint("Life OS Workbench - GPU-native");
+        cx.notify();
+    }
+
+    // ---- command palette ----
+
+    fn on_command_palette(
+        &mut self,
+        _: &CommandPalette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_palette(window, cx);
+    }
+
+    fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.palette_open = true;
+        self.palette_query.clear();
+        self.palette_selected = 0;
+        window.focus(&self.palette_focus, cx);
+        cx.notify();
+    }
+
+    fn close_palette(&mut self, cx: &mut Context<Self>) {
+        self.palette_open = false;
+        cx.notify();
+    }
+
+    fn palette_matches(&self) -> Vec<super::commands::Command> {
+        filter(&self.palette_query, &commands())
+    }
+
+    fn on_palette_key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let ks = &e.keystroke;
+        match ks.key.as_str() {
+            "escape" => self.close_palette(cx),
+            "enter" => self.palette_run_selected(window, cx),
+            "up" => {
+                self.palette_selected = self.palette_selected.saturating_sub(1);
+                cx.notify();
+            }
+            "down" => {
+                let n = self.palette_matches().len();
+                if n > 0 {
+                    self.palette_selected = (self.palette_selected + 1).min(n - 1);
+                }
+                cx.notify();
+            }
+            "backspace" => {
+                self.palette_query.pop();
+                self.palette_selected = 0;
+                cx.notify();
+            }
+            _ => {
+                // Printable character (ignore modifier chords).
+                if !ks.modifiers.platform && !ks.modifiers.control {
+                    if let Some(ch) = &ks.key_char {
+                        if !ch.is_empty() && !ch.chars().any(|c| c.is_control()) {
+                            self.palette_query.push_str(ch);
+                            self.palette_selected = 0;
+                            cx.notify();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn palette_run_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let matches = self.palette_matches();
+        let picked = matches.get(self.palette_selected).map(|c| c.id);
+        self.palette_open = false;
+        if let Some(id) = picked {
+            self.run_command(id, window, cx);
+        } else {
+            cx.notify();
+        }
+    }
+
+    // ---- chrome regions ----
+
+    /// Custom title bar: brand on the left, the center-mode strip on the right.
+    fn title_bar(&self, _cx: &Context<Self>) -> impl IntoElement {
+        let mode = self.mode;
+        TitleBar::new()
+            .child(div().font_semibold().child("Life OS Workbench"))
+            .child(
+                div()
+                    .h_flex()
+                    .gap_1()
+                    .child(mode_button(
+                        "m-editor",
+                        "Editor",
+                        mode == Mode::Editor,
+                        FocusEditor,
+                    ))
+                    .child(mode_button(
+                        "m-terminal",
+                        "Terminal",
+                        mode == Mode::Terminal,
+                        FocusTerminal,
+                    ))
+                    .child(mode_button(
+                        "m-agent",
+                        "Agent",
+                        mode == Mode::Agent,
+                        FocusAgent,
+                    ))
+                    .child(mode_button(
+                        "m-lifeos",
+                        "Life OS",
+                        mode == Mode::LifeOs,
+                        OpenLifeOs,
+                    ))
+                    .child(mode_button(
+                        "m-recall",
+                        "Recall",
+                        mode == Mode::Recall,
+                        OpenRecall,
+                    ))
+                    .child(mode_button(
+                        "m-memory",
+                        "Memory",
+                        mode == Mode::Memory,
+                        OpenMemory,
+                    ))
+                    .child(mode_button(
+                        "m-trading",
+                        "Trading",
+                        mode == Mode::Trading,
+                        OpenTrading,
+                    ))
+                    .child(mode_button("m-vcs", "VCS", mode == Mode::Vcs, OpenVcs))
+                    .child(mode_button("m-jobs", "Jobs", mode == Mode::Jobs, OpenJobs))
+                    .child(mode_button(
+                        "m-selfextend",
+                        "Self-extend",
+                        mode == Mode::SelfExtend,
+                        OpenSelfExtend,
+                    ))
+                    .child(mode_button(
+                        "m-settings",
+                        "Settings",
+                        mode == Mode::Settings,
+                        OpenSettings,
+                    )),
+            )
+    }
+
+    /// The clickable tab strip: one chip per tab, active highlighted, plus a
+    /// new-tab button.
+    fn tab_strip(&self, cx: &Context<Self>) -> impl IntoElement {
+        let active = self.layout.active_tab;
+        div()
+            .h_flex()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .py_1()
+            .bg(chrome_bg(cx))
+            .border_b_1()
+            .border_color(glass_edge(cx))
+            .children(self.layout.tabs.iter().enumerate().map(|(i, _)| {
+                let is_active = i == active;
+                div()
+                    .id(("tab", i))
+                    .px_3()
+                    .py_0p5()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .bg(if is_active {
+                        pane_bg(cx)
+                    } else {
+                        chrome_bg(cx)
+                    })
+                    .text_color(if is_active {
+                        cx.theme().foreground
+                    } else {
+                        cx.theme().muted_foreground
+                    })
+                    .text_xs()
+                    .child(format!("Tab {}", i + 1))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            this.layout = this.layout.switch_tab(i);
+                            this.hint(&format!("tab {}", i + 1));
+                            cx.notify();
+                        }),
+                    )
+            }))
+            .child(
+                div()
+                    .id("tab-new")
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .text_color(cx.theme().muted_foreground)
+                    .text_xs()
+                    .child("+")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            this.run_command(CommandId::NewTab, window, cx);
+                        }),
+                    ),
+            )
+    }
+
+    /// The left file sidebar: the real directory tree over [`FileTree`].
+    fn sidebar(&self, cx: &Context<Self>) -> impl IntoElement {
+        let root_name = self
+            .file_tree
+            .root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("workspace")
+            .to_string();
+        let rows = self.file_tree.rows();
+        let selected = self.file_tree.selected;
+
+        div()
+            .v_flex()
+            .size_full()
+            .bg(chrome_bg(cx))
+            .text_color(cx.theme().sidebar_foreground)
+            .child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(format!("EXPLORER - {root_name}")),
+            )
+            .child(
+                div()
+                    .id("file-tree")
+                    .v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .children(rows.into_iter().enumerate().map(|(i, row)| {
+                        let is_sel = i == selected;
+                        let indent = px(8.0 + row.depth as f32 * 12.0);
+                        let icon = if row.is_dir {
+                            if row.expanded {
+                                "\u{25BE} " // ▾
+                            } else {
+                                "\u{25B8} " // ▸
+                            }
+                        } else {
+                            "  "
+                        };
+                        let path = row.path.clone();
+                        let is_dir = row.is_dir;
+                        div()
+                            .id(("row", i))
+                            .h_flex()
+                            .items_center()
+                            .w_full()
+                            .pl(indent)
+                            .pr_2()
+                            .py_0p5()
+                            .text_sm()
+                            .cursor_pointer()
+                            .when(is_sel, |d| d.bg(cx.theme().accent))
+                            .text_color(if row.is_dir {
+                                cx.theme().foreground
+                            } else {
+                                cx.theme().muted_foreground
+                            })
+                            .child(format!("{icon}{}", row.name()))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, window, cx| {
+                                    this.file_tree = this.file_tree.selected(i);
+                                    if is_dir {
+                                        this.file_tree = this.file_tree.toggled(&path);
+                                    } else {
+                                        this.open_file(&path, window, cx);
+                                    }
+                                    cx.notify();
+                                }),
+                            )
+                    })),
+            )
+    }
+
+    /// Recursively tile a tab's pane tree. Splits become flex rows/columns with
+    /// a 1px divider; leaves render the mode placeholder with a focus ring.
+    ///
+    /// Each half is sized with an explicit `flex_basis(50%)` rather than
+    /// `flex_grow` + `size_full`: percentage height does not distribute in a
+    /// column flex without a definite basis, which otherwise collapses the
+    /// first pane of a vertical split to zero.
+    fn render_pane_tree(&self, node: &LayoutNode, cx: &Context<Self>) -> AnyElement {
+        match node {
+            LayoutNode::Leaf(id) => self.render_leaf(*id, cx),
+            LayoutNode::Split { dir, first, second } => {
+                let a = self.render_pane_tree(first, cx);
+                let b = self.render_pane_tree(second, cx);
+                let base = div().size_full();
+                let base = match dir {
+                    SplitDir::Horizontal => base.h_flex(),
+                    SplitDir::Vertical => base.v_flex(),
+                };
+                let half = || {
+                    div()
+                        .flex_basis(gpui::relative(0.5))
+                        .flex_shrink_1()
+                        .min_w_0()
+                        .min_h_0()
+                        .overflow_hidden()
+                };
+                let divider = match dir {
+                    SplitDir::Horizontal => div().w(px(1.0)).h_full(),
+                    SplitDir::Vertical => div().h(px(1.0)).w_full(),
+                }
+                .flex_shrink_0()
+                .bg(cx.theme().border);
+                base.child(half().child(a))
+                    .child(divider)
+                    .child(half().child(b))
+                    .into_any_element()
+            }
+        }
+    }
+
+    fn render_leaf(&self, id: PaneId, cx: &Context<Self>) -> AnyElement {
+        let focused = self.layout.tab().focused == id;
+        let border = if focused {
+            cx.theme().caret
+        } else {
+            cx.theme().border
+        };
+        let base = div()
+            .id(("pane", id as usize))
+            .size_full()
+            .border_1()
+            .border_color(border)
+            .bg(pane_bg(cx))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    this.layout = this.layout.focus_pane(id);
+                    cx.notify();
+                }),
+            );
+
+        // Each mode is backed by a single shared view rendered in the focused
+        // leaf; unfocused leaves show a labelled placeholder. Per-pane content
+        // binding (a different mode per leaf) is a later refinement.
+        // The terminal's live surface lives in the bottom dock (a gpui entity
+        // renders once per frame), so Terminal mode falls through to the
+        // placeholder here and the dock shows the real thing.
+        if focused {
+            match self.mode {
+                Mode::Editor => return base.child(self.editor.clone()).into_any_element(),
+                Mode::Agent => return base.child(self.agent.clone()).into_any_element(),
+                Mode::LifeOs => return base.child(self.lifeos.clone()).into_any_element(),
+                Mode::Recall => return base.child(self.recall.clone()).into_any_element(),
+                Mode::Settings => return base.child(self.settings.clone()).into_any_element(),
+                Mode::Memory => return base.child(self.memory.clone()).into_any_element(),
+                Mode::Trading => return base.child(self.trading.clone()).into_any_element(),
+                Mode::Vcs => return base.child(self.vcs.clone()).into_any_element(),
+                Mode::Jobs => return base.child(self.jobs.clone()).into_any_element(),
+                Mode::SelfExtend => return base.child(self.selfextend.clone()).into_any_element(),
+                Mode::Terminal => {}
+            }
+        }
+        base.v_flex()
+            .items_center()
+            .justify_center()
+            .gap_2()
+            .text_color(cx.theme().muted_foreground)
+            .child(
+                div()
+                    .text_color(cx.theme().foreground)
+                    .font_semibold()
+                    .child(self.mode.label()),
+            )
+            .child(div().text_xs().child(format!("pane {id}")))
+            .into_any_element()
+    }
+
+    /// The bottom terminal dock: a header strip over the live terminal view.
+    fn dock(&self, cx: &Context<Self>) -> impl IntoElement {
+        div()
+            .v_flex()
+            .size_full()
+            .border_t_1()
+            .border_color(glass_edge(cx))
+            .child(
+                div()
+                    .px_3()
+                    .py_1()
+                    .text_xs()
+                    .bg(chrome_bg(cx))
+                    .text_color(cx.theme().muted_foreground)
+                    .child("TERMINAL"),
+            )
+            .child(div().flex_1().min_h_0().child(self.terminal.clone()))
+    }
+
+    /// The center column: the pane tree over an optional resizable dock.
+    fn center(&self, cx: &Context<Self>) -> impl IntoElement {
+        let tree = self.render_pane_tree(&self.layout.tab().root, cx);
+        v_resizable("workspace-rows")
+            .child(resizable_panel().child(div().size_full().child(tree)))
+            .when(self.dock_open, |group| {
+                group.child(resizable_panel().size(px(220.0)).child(self.dock(cx)))
+            })
+    }
+
+    /// Sidebar | center, both resizable via draggable dividers.
+    fn body(&self, cx: &Context<Self>) -> impl IntoElement {
+        h_resizable("workspace-cols")
+            .when(self.sidebar_open, |group| {
+                group.child(
+                    resizable_panel()
+                        .size(px(240.0))
+                        .size_range(px(180.0)..px(420.0))
+                        .child(self.sidebar(cx)),
+                )
+            })
+            .child(resizable_panel().child(self.center(cx)))
+    }
+
+    fn status_bar(&self, cx: &Context<Self>) -> impl IntoElement {
+        let panes = self.layout.tab().root.panes().len();
+        StatusBar::new()
+            .left(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(self.status_hint.clone()),
+            )
+            .right(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(format!(
+                        "{} · {} pane{} · main",
+                        self.mode.label(),
+                        panes,
+                        if panes == 1 { "" } else { "s" }
+                    )),
+            )
+    }
+
+    /// The command palette overlay: a scrim + centered modal with a fuzzy list.
+    fn palette_overlay(&self, cx: &Context<Self>) -> impl IntoElement {
+        let matches = self.palette_matches();
+        let selected = self.palette_selected.min(matches.len().saturating_sub(1));
+
+        let modal = div()
+            .track_focus(&self.palette_focus)
+            .on_key_down(cx.listener(Self::on_palette_key))
+            .w(px(560.0))
+            .max_h(px(420.0))
+            .mt(px(84.0))
+            .v_flex()
+            .bg(cx.theme().background)
+            .border_1()
+            .border_color(cx.theme().border)
+            .rounded_lg()
+            .overflow_hidden()
+            // Clicks inside the modal must not fall through to the scrim.
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .text_color(cx.theme().foreground)
+                    .child(format!("\u{203A} {}\u{2588}", self.palette_query)),
+            )
+            .child(
+                div()
+                    .id("palette-list")
+                    .v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .children(matches.into_iter().enumerate().map(|(i, cmd)| {
+                        let is_sel = i == selected;
+                        div()
+                            .id(("cmd", i))
+                            .px_3()
+                            .py_1()
+                            .w_full()
+                            .cursor_pointer()
+                            .text_sm()
+                            .when(is_sel, |d| d.bg(cx.theme().accent))
+                            .text_color(if is_sel {
+                                cx.theme().foreground
+                            } else {
+                                cx.theme().muted_foreground
+                            })
+                            .child(cmd.title)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, window, cx| {
+                                    this.palette_selected = i;
+                                    this.palette_run_selected(window, cx);
+                                }),
+                            )
+                    })),
+            );
+
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .justify_center()
+            .items_start()
+            .bg(gpui::black().opacity(0.45))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.close_palette(cx)),
+            )
+            .child(modal)
+    }
+}
+
+impl Render for WorkspaceView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let main = div()
+            .v_flex()
+            .size_full()
+            .bg(pane_bg(cx))
+            .text_color(cx.theme().foreground)
+            .child(self.title_bar(cx))
+            .child(self.tab_strip(cx))
+            .child(div().flex_1().min_h_0().w_full().child(self.body(cx)))
+            .child(self.status_bar(cx));
+
+        div()
+            .id("workbench")
+            .relative()
+            .size_full()
+            // Commands from the menu / keymap route here (ancestor of both the
+            // main column and the palette overlay, so shortcuts work in both).
+            .on_action(cx.listener(Self::on_toggle_sidebar))
+            .on_action(cx.listener(Self::on_toggle_dock))
+            .on_action(cx.listener(Self::on_focus_editor))
+            .on_action(cx.listener(Self::on_focus_terminal))
+            .on_action(cx.listener(Self::on_focus_agent))
+            .on_action(cx.listener(Self::on_open_lifeos))
+            .on_action(cx.listener(Self::on_open_recall))
+            .on_action(cx.listener(Self::on_open_settings))
+            .on_action(cx.listener(Self::on_open_memory))
+            .on_action(cx.listener(Self::on_open_trading))
+            .on_action(cx.listener(Self::on_open_vcs))
+            .on_action(cx.listener(Self::on_open_jobs))
+            .on_action(cx.listener(Self::on_open_selfextend))
+            .on_action(cx.listener(Self::on_new_tab))
+            .on_action(cx.listener(Self::on_close_tab))
+            .on_action(cx.listener(Self::on_split_right))
+            .on_action(cx.listener(Self::on_split_down))
+            .on_action(cx.listener(Self::on_close_pane))
+            .on_action(cx.listener(Self::on_focus_next_pane))
+            .on_action(cx.listener(Self::on_focus_prev_pane))
+            .on_action(cx.listener(Self::on_open_file))
+            .on_action(cx.listener(Self::on_about))
+            .on_action(cx.listener(Self::on_command_palette))
+            .child(main)
+            .when(self.palette_open, |d| d.child(self.palette_overlay(cx)))
+    }
+}
+
+/// A title-bar mode button that dispatches `action` on click.
+fn mode_button(
+    id: &'static str,
+    label: &'static str,
+    active: bool,
+    action: impl gpui::Action + Clone,
+) -> Button {
+    let button = Button::new(id).label(label).small();
+    let button = if active {
+        button.primary()
+    } else {
+        button.ghost()
+    };
+    button.on_click(move |_, window, cx| window.dispatch_action(Box::new(action.clone()), cx))
+}
+
+fn shown(v: bool) -> &'static str {
+    if v {
+        "shown"
+    } else {
+        "hidden"
+    }
+}

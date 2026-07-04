@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  workbench:
+    name: workbench (fmt, clippy, test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            workbench
+            services
+      - name: fmt
+        run: cargo fmt --check
+        working-directory: workbench
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+        working-directory: workbench
+      - name: test
+        run: cargo test
+        working-directory: workbench
+
+  bundle:
+    name: macOS app bundle
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            workbench
+            services
+      - name: bundle Workbench.app
+        run: ./scripts/bundle-app.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Workbench.app
+          path: dist/Workbench.app.zip
+
+  services:
+    name: services (test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services
+      - name: test
+        run: cargo test --workspace
+        working-directory: services

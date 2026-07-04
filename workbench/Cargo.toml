@@ -1,0 +1,103 @@
+[workspace]
+resolver = "2"
+members = ["."]
+
+[package]
+name = "lifeos-workbench"
+version = "0.1.0"
+edition = "2021"
+description = "GPU-native, agent-native workbench over lifeos-api (linked in-process)"
+
+[[bin]]
+name = "workbench"
+path = "src/main.rs"
+
+[features]
+# The default build is the GPU-native gpui frontend. The legacy ratatui /
+# glyph-grid renderer (inherited from the origin repo) is preserved behind
+# this off-by-default feature; its modules are ported into `ui/` and dropped
+# as the gpui frontend reaches parity (see CLAUDE.md build order).
+default = []
+legacy-tui = [
+    "dep:ratatui",
+    "dep:crossterm",
+    "dep:ratatui-wgpu",
+    "dep:winit",
+    "dep:fontdb",
+    "dep:pollster",
+    "dep:wgpu",
+    "dep:bytemuck",
+    "dep:muda",
+    "dep:arboard",
+]
+
+[dependencies]
+# In-process Life OS backend (unchanged from upstream).
+lifeos-api = { path = "../services/lifeos-api" }
+axum = "0.7.5"
+tower = { version = "0.5", features = ["util"] }
+tokio = { version = "1.38", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+json5 = "0.4"
+
+# GPU-native GUI frontend: Zed's gpui engine + the gpui-component library.
+# gpui-component 0.5.x pins gpui to this exact zed revision; match it so
+# cargo unifies a single gpui.
+gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe", features = ["font-kit", "runtime_shaders"] }
+# A curated set of `tree-sitter-*` language features gives the native code
+# editor syntax highlighting (gpui-component ships no default features, so
+# without these the editor renders but never colours). Scoped to the languages
+# this workspace actually contains rather than the full ~35-grammar umbrella,
+# to keep cold-build weight in check.
+gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "b7e63cc29018c27bb24788ddb212f4cbdd861334", features = [
+    "tree-sitter-rust",
+    "tree-sitter-python",
+    "tree-sitter-javascript",
+    "tree-sitter-typescript",
+    "tree-sitter-tsx",
+    "tree-sitter-toml",
+    "tree-sitter-yaml",
+    "tree-sitter-markdown",
+    "tree-sitter-bash",
+    "tree-sitter-go",
+    "tree-sitter-c",
+    "tree-sitter-cpp",
+    "tree-sitter-html",
+    "tree-sitter-css",
+    "tree-sitter-lua",
+    "tree-sitter-sql",
+    "tree-sitter-make",
+] }
+
+# Terminal engine (kept; rendered by a custom gpui element with a cursor).
+alacritty_terminal = "0.24"
+portable-pty = "0.8"
+
+# Lua configuration (mlua, vendored Lua 5.4). Loads the user's config.lua and
+# parses WezTerm's own Lua config directly for first-launch import.
+mlua = { version = "0.9", features = ["lua54", "vendored"] }
+
+# The editor (#24) uses gpui-component's native code editor, whose tree-sitter
+# 0.26 highlighting is enabled via the language features above - no standalone
+# grammar crates, so no `links` collision. helix-core stays absent for now: it
+# is only needed for the optional `Helix` editing engine, whose syntax layer
+# must be aligned to tree-sitter 0.26 before it can coexist (a #24 follow-up).
+# Its rope/selection/transaction model is what that engine would reuse; the
+# grammar crates it pinned (0.24/0.25) are what previously collided.
+
+# Legacy ratatui renderer (feature-gated, off by default).
+ratatui = { version = "0.29", optional = true }
+crossterm = { version = "0.28", optional = true }
+ratatui-wgpu = { version = "0.4.1", optional = true }
+winit = { version = "0.30", optional = true }
+fontdb = { version = "0.23", optional = true }
+pollster = { version = "0.4", optional = true }
+wgpu = { version = "26", optional = true }
+bytemuck = { version = "1", features = ["derive"], optional = true }
+muda = { version = "0.19", optional = true }
+arboard = { version = "3", optional = true }
+
+[dev-dependencies]
+ulid = "1.1"

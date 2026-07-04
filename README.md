@@ -1,330 +1,305 @@
-# Life OS
+# Life OS Workbench
 
-A self-extending, agent-driven personal operating system - one place to manage **learning, tasks, coding/projects, trading, social, marketing, and design** (and anything else you add later: health, finance, …), backed by a single common database, controllable from Telegram even when the laptop is off, and able to **build its own new features on request**.
+A terminal-weight, agent-native fork of [Life OS](https://github.com/chayan-bit/life-os) that pulls the personal-operating-system _inside a single Rust binary_ alongside a modal code editor, an embedded terminal, an AI agent, and a time-travel debugger.
 
-It is personal today but **architected to become a multi-tenant SaaS** with no rewrite.
+Where upstream Life OS is a Rust backend + a heavy React/Vite SPA talking over HTTP, the Workbench keeps the Rust backend, **deletes the browser**, and renders every Life OS module as a cell-grid UI over the _same_ declarative manifests - linking `lifeos-api` in-process instead of bridging to it.
 
-This README is the canonical architecture document - a superset of the original plan. `CLAUDE.md` is the short working-rules companion.
+At release the Workbench is a **standalone desktop app**: a double-clickable macOS app with its own GPU-rendered window - a monospace cell grid painted by a thin `winit` + `wgpu` glyph renderer, the same rendering model a terminal emulator uses.
+It is _not_ a program you run inside another terminal (though a secondary `--tui` mode keeps that working over SSH).
+The visual bar is Zed-adjacent - real font rendering with ligatures, proper padding, smooth resize, native window chrome - while the weight stays terminal-class: one Rust binary, no Electron, no webview, cold start in tens of milliseconds.
+The feature bar is Cursor-class: everything a first-rank agentic IDE ships (see [§12](#12-cursor-parity-and-agent-native-roadmap)), plus config import from VS Code and WezTerm so it adopts your existing fonts, themes, and keybindings on first launch.
 
----
+This README is the canonical architecture document for the fork. `CLAUDE.md` is the short working-rules companion. `frontend/DESIGN.md` is the cell-grid design system (replacing the old Neo-Brutalist web system).
 
-## 0. Quickstart
-
-```sh
-git clone <this-repo> && cd life-os
-./setup.sh    # checks Rust/Node, builds services, installs frontend deps
-./run.sh      # API on :8080 + web app on :5173 (add --with-drain for jobs)
-```
-
-Zero configuration needed: the API auto-creates and migrates a local
-`lifeos.db` on first boot, and AI runs **keyless** through whatever coding
-agent CLI is already on your PATH (Claude Code, Gemini CLI, Codex, OpenCode,
-Hermes, Antigravity, ...) - switch agent/model on the go from the AI Console.
-Every optional knob (Turso sync, Telegram bot, Nango OAuth, whisper, ...) is
-documented in `.env.example` and `docs/MANUAL-SETUP.md`.
-The web app is an installable PWA (Add to Home Screen / Install app).
+> Fork status: phases 1-4 of the original build order are implemented (shell + terminal panes, Helix-core editor + LSP, manifest TUI renderers over in-process `lifeos-api`, ACP agent pane with reviewable diffs, recall search, agent toolbelt). The upstream Life OS backend (schema, modules, services, worker, harness loop) is inherited **unchanged**. Current front: the standalone window host and Cursor-parity feature wave described below.
 
 ---
 
-## 1. Why this exists
+## 0. Relationship to the other two repos
 
-Two problems drove it:
+This project is one of three that compose a single system. Do not merge them; they stay separate repos with clean contracts.
 
-1. **Notion's free AI is too weak and forces manual database-building.** Every tracker had to be hand-modeled, and the AI couldn't populate or evolve it. Life OS inverts this: a generic graph schema means you *never* hand-build a database per domain, and the agent reads/writes it directly.
-2. **Tools and data were siloed** - Postgres apps, broker APIs, JSON task files, a SQLite memory DB, markdown vaults, social accounts, Figma files - none talking to each other. Life OS unifies them under one database and one agent loop.
+| Repo                                                                                         | Role                                                                                                                                                  | Contract to the Workbench                                                                                                                                                                                                                                                                                    |
+| -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [`life-os`](https://github.com/chayan-bit/life-os) (upstream)                                | The personal-OS backend: generic entity-graph DB, declarative modules, self-extension, Telegram lane, harness loop.                                   | The Workbench **is a fork** of it. Backend crates (`lifeos-api`, `lifeos-vcs`, `lifeos-ingest`, `lifeos-drain`, `broker-guard`), `modules/`, `migrations/`, `worker/` are inherited and reused. Only `frontend/` (React → TUI) and the client↔API boundary (HTTP → in-process) change.                       |
+| [`Mirrorscope`](https://github.com/chayan-bit/Mirrorscope) (sibling, local `../Mirrorscope`) | A cross-platform, eBPF-assisted **time-travel debugger** for C / Rust / Go with first-class async-Rust and goroutine semantics, exposed over **DAP**. | The Workbench is Mirrorscope's **primary DAP client and host UI**. Mirrorscope stays a standalone tool (also usable from VS Code); the Workbench renders its task-tree / timeline / watchpoint panes natively and hands its operations to the agent. See [§8](#8-mirrorscope-integration-the-debug-surface). |
 
-Four requirements reshaped the design:
-
-- **Mobile-first control with the laptop off** - manage everything from a Telegram bot 24/7.
-- **Self-extension** - an AI inside the app that, when asked, edits the codebase to add a brand-new module itself.
-- **Real-world integrations from day 1** - social (multi-account OAuth), marketing, and design are first-class, not "addable later."
-- **SaaS-ready** - multi-tenant, secret-isolated, and billable if it ever leaves personal use.
-
-The result is a **generic multi-tenant entity-graph + a module/plugin system + a self-extension builder + the local Claude Code harness as the brain**, with seven seed domains and infinite room to grow.
+The three share one spine - **time-travel as a universal primitive** ([§9](#9-the-spine-why-this-is-one-system)).
 
 ---
 
-## 2. Design principles
+## 1. Why fork instead of extend upstream
 
-- **One generic schema, specialized by declarative manifests.** Storage is generic; per-domain behavior is metadata. The opposite of Notion's per-database modeling tax.
-- **Multi-tenant from the first commit.** Every data row carries `workspace_id`; personal use is just one workspace. No single-user assumptions anywhere.
-- **Local-first, no lock-in.** SQLite-compatible store; offline on the Mac; data is yours and portable.
-- **Codegen only on the trusted Mac.** The always-on cloud surface can only enqueue; all file-writing and reasoning-heavy work happens locally.
-- **Auditability over speed; gate the irreversible.** Append-only event log; outward/irreversible actions (social posts, trades) are human-gated; every self-built module is a revertable git commit.
-- **Minimum always-on context, token-disciplined.** API-first thin tools over heavy MCPs; on-demand loading only.
-- **Reuse before build.** Generalize the existing `knowledge-atlas` app, the existing harness, and existing skills (copywriting, figma-*, mcp-*).
+Upstream Life OS made a deliberate, correct choice for a _web-first, SaaS-ready_ product: a React + Vite SPA (Refine, Cytoscape, Tailwind v4) served to a browser, talking to the local Rust API over `127.0.0.1:8080`.
 
----
+That choice carries weight this fork rejects for _personal, daily-driver_ use:
 
-## 3. Architecture overview — three tiers, two brains, one DB
+- **A browser is not terminal-weight.** The SPA is the heavy part of Life OS; a Chromium/webview surface is orders of magnitude heavier than a terminal.
+- **The HTTP bridge is an artificial seam.** The app and the API are both Rust, yet they talk over a socket with JSON serialization, CORS, and a second process. For a single-user local tool that boundary buys nothing.
+- **The daily surface is textual.** Capture, tasks, trading journal, learning, project status, search, and the agent loop are ~80% of real use, and all of it is structured text - exactly what a TUI renders best.
+- **Mobile is already solved.** The Telegram/Cloudflare lane covers laptop-off control, so the fork owes nothing to a PWA.
 
-```
-                         ┌─────────────────────────────┐
-   Telegram  ──────────► │  Cloudflare Worker (free)    │   LIGHT/MEDIUM brain
-   (laptop off-OK)       │  bot — Claude Haiku          │   full DB (workspace) +
-                         │  full common-DB + memory +   │   memory + audit;
-                         │  audit; enqueues heavy → jobs│   gated outward actions
-                         └──────────────┬──────────────┘
-                                        │  HTTPS (workspace-scoped, authed)
-                         ┌──────────────▼──────────────┐
-                         │   Turso / libSQL  lifeos.db  │   CANONICAL, always-on
-                         │ control-plane + data-plane   │   multi-tenant,
-                         │ entities·edges·events·jobs…  │   SQLite-compatible
-                         └──────────────┬──────────────┘
-                                        │  embedded replica (periodic sync)
-   ┌────────────────────────────────────▼────────────────────────────────┐
-   │  MAC (when awake)                                                     │
-   │  • lifeos local API  (single DB-token owner, 127.0.0.1, authed)     │   HEAVY brain
-   │  • Life OS SPA (generalized knowledge-atlas, light theme)           │   deep work
-   │  • Claude Code harness: module scaffolder, Eval, Release, deep agents│
-   │  • thin curl tools in ~/.claude/bin (allow-listed) + broker-guard    │
-   │  • Nango (self-hosted): OAuth vault + proxy for social/Figma/Notion  │
-   │  • integration callers: Figma, Higgsfield, social APIs (on-demand)   │
-   └──────────────────────────────────────────────────────────────────────┘
-```
-
-**Two brains, one database:**
-
-- **Light/medium brain (cloud, always-on).** A Telegram bot on Cloudflare Workers (scale-to-zero compute = free) running on **Claude Haiku**. It has **full common-DB access scoped to its workspace** (entities/edges/events/annotations RW), **harness memory recall** (shared-DB FTS5/vector), and **audit logging** (`events`). It handles capture, queries, and medium actions, **gates outward actions** (social posts, trades) for approval, and **enqueues** anything heavy/codegen for the Mac. Works with the laptop off. (Compute is free; Haiku tokens are minimal.)
-- **Heavy brain (Mac).** The existing Claude Code harness (Claude) does deep work: study authoring, coding, trade analysis, the self-extension builder, integration-heavy design/marketing work, and the Eval/Release loop. Syncs to the same DB.
-
-**Why Turso/libSQL:** SQLite wire-compatible (all existing FTS5 / `memvec.py` code ports unchanged), hosted and always reachable, and **purpose-built for multi-tenant SaaS** (cheap database-per-tenant when we scale). An **embedded replica** on the Mac preserves local-first/offline; the cloud copy is always awake for Telegram.
-
-**Key invariant:** request/state is **data** in the synced DB (survives the Mac being off); **codegen + heavy reasoning only ever run on the trusted Mac**; the cloud surface stays trivial.
+The fork's thesis: **an IDE with the soul and weight of a terminal, in its own window, with your whole life OS inside it.** One Rust process; "editor", "debugger", "terminal", and each Life OS module are _modes/panes_ of one tiling cell grid, not separate apps.
+The app owns its window and renderer the way Alacritty or Ghostty do - which is precisely what makes it lightweight AND visually first-class at the same time; borrowing a host terminal's renderer (the classic TUI move) was the interim state, not the product.
 
 ---
 
-## 4. The common database
+## 2. The two architectural changes (everything else is inherited)
 
-### 4.1 Data plane (one generic schema, per workspace)
-A task / trade / topic / post / campaign / asset are all rows in `entities`, distinguished by `workspace_id` + `module` + `type` + a flexible `attrs` JSON. **New domains and fields need zero migration by default.**
+Everything in upstream Life OS's [architecture](https://github.com/chayan-bit/life-os) - the generic multi-tenant `entities`/`edges`/`events`/`jobs` schema, declarative modules, self-extension builder, owned-credential Nango model, the two-brains/one-DB tiering, the harness Eval/Release loop, every hard security invariant - is **carried over verbatim**. Two things change:
 
-| Table | Purpose |
-|---|---|
-| `entities` | Every typed node: `workspace_id`, `module`, `type` (topic/task/project/trade/social_account/post/campaign/content/lead/design_file/asset/component/note/gap/…), `parent_id` hierarchy, `status`, `tier`, `ts`, **`attrs` JSON** (escape hatch), `source`. FTS5-backed. |
-| `edges` | Typed cross-domain links (generalizes the atlas's `connections`): `connection`/`depends_on`/`blocks`/`derived_from`/`owns`/`publishes_to`/`uses_asset`/…; `state` (pending/accepted), `created_by`; nullable `dst_id` + `dst_ref`. |
-| `events` | **Append-only** log: domain events (study.review, task.completed, trade.closed, post.published, campaign.sent) **and** harness run-rows (run_id, tier, model, tokens, cost, latency, error, outcome, eval_score, gated). Powers Observe/Eval/Release. |
-| `annotations` | Reader notes (generalizes the atlas's localStorage comment/link/question layer). |
-| `jobs` | Heavy-work queue: bot enqueues, Mac drains. |
-| `module_requests` | Self-extension queue: survives the Mac being off. |
+### 2.1 Frontend: React SPA → TUI renderers over the same manifests
 
-### 4.2 Control plane (SaaS-ready, single-row for personal use)
+A Life OS module is a _declarative manifest_ (`entityTypes`, `attrs`, `views:[{kind:'list'|'board'|'table'|'calendar'|'gallery'|'graph'|'timeline'|'map'}]`) that contains **no DOM/router/DB code** - an invariant upstream already enforces. The React SPA is merely _one_ renderer backend that interprets those manifests.
 
-| Table | Purpose |
-|---|---|
-| `workspaces` | Tenant. Personal = one seeded row. Carries plan/limits. |
-| `users` | Identity. Personal = one row (you). |
-| `memberships` | `user_id ↔ workspace_id` + role (owner/admin/member). |
-| `connections` | Per-workspace, per-account integration credentials: `provider` (instagram/x/whatsapp/slack/reddit/figma/notion/kite/…), `account_handle`, `scopes`, **`access_token_enc` / `refresh_token_enc` (encrypted at rest)**, `expires_at`, `status`. Supports **multiple accounts per provider**. |
-| `subscriptions` / `plans` | Billing seam (stub now; gates module/quota access in SaaS). |
+The Workbench adds a **second renderer backend written in Rust/ratatui** that consumes the _identical_ manifests:
 
-**Tenancy strategy:** schema is `workspace_id`-scoped everywhere; personal deployment uses **one shared DB**, and the API enforces workspace filtering (RLS-style). SaaS scales via **Turso database-per-workspace** - the local API abstracts "which DB" so this is a deployment swap, not a code change. Secrets are **never** synced into the agent context or the replica's reach of the bot; the API injects them at call time using a per-workspace envelope key.
+| `view.kind`      | Upstream (React)  | Workbench (TUI)                                                                     |
+| ---------------- | ----------------- | ----------------------------------------------------------------------------------- |
+| `list` / `table` | React list/table  | ratatui `Table` / `List`                                                            |
+| `board`          | React Kanban      | ratatui column-pane Kanban                                                          |
+| `calendar`       | React calendar    | cell-grid calendar widget                                                           |
+| `detail`         | React detail page | stacked field pane + markdown                                                       |
+| `timeline`       | React timeline    | horizontal scrubber widget                                                          |
+| `gallery`        | React image grid  | **terminal graphics protocol** thumbnails ([§6](#6-what-the-tui-can-and-cannot-do)) |
+| `graph`          | Cytoscape         | small: box-drawing node-link; large: **external viewer escape hatch**               |
+| `map`            | React map         | weak (ASCII) / external viewer                                                      |
 
-### 4.3 Search & recall
-- **Lexical:** `entities_fts` (FTS5; triggers flatten `attrs` → `attrs_text`).
-- **Semantic:** `entity_vec` reusing `~/.claude/bin/memvec.py` (MiniLM-384, sqlite-vec `vec0`); fuse with FTS5 via RRF like `~/.claude/bin/memory-recall`. The shared DB *is* the cross-tier memory the Haiku bot recalls from.
-- **Derived state lives in a SEPARATE, never-synced database file.** Turso/libSQL has **no table-level "don't sync" flag** - a synced embedded replica converges to the primary's schema, so a local-only table in the synced file would be clobbered. Derived state (FTS5 + sqlite-vec) therefore lives in `lifeos-derived.db` (plain SQLite, **no `syncUrl`**), `ATTACH`-ed at runtime. This is already how `memvec.py` stores vectors, so it is reuse, not new work; physical separation enforces "never synced" instead of a flag that does not exist.
-- **Keep sqlite-vec/memvec; do not switch to libSQL native vectors.** Native vectors are beta with the weakest *local* path and would only help if vectors lived in the synced DB - which violates the rule above.
+The manifests, the seven seed modules, the self-extension scaffolder's output, and `modules/_template/` are **unchanged**. Writing a new renderer backend is exactly the swap the manifest architecture was designed to allow; the fork is the first consumer to exercise it.
 
-### 4.4 No-migration growth & sync
-Hot query paths get **additive** `GENERATED … VIRTUAL` columns over `attrs` (e.g. `due`) - confirmed indexable (expression index) and addable via `ALTER TABLE ADD COLUMN` **without a table rewrite**; ~90% of new modules ship with no SQL.
+### 2.2 Process boundary: HTTP bridge → in-process linking
 
-**Sync model (corrected against how libSQL actually behaves):**
-- `events`/`jobs`/`module_requests` are append-only → conflict-free.
-- **Embedded-replica writes go to the remote primary by default; the Mac sets `offline: true`** (Turso Sync, public beta) so writes land locally first and sync bidirectionally - this is required for the local-first/offline premise, not optional.
-- **Turso's default conflict resolution is *last-push-wins* (not LWW-on-`updated_at`), at row granularity over the whole `attrs` JSON blob.** Mitigation, defense-in-depth: (1) **single-writer-per-row discipline** - the bot writes its lane (light/medium), the Mac writes its lane (heavy); make it an explicit invariant; (2) treat the **append-only `events` log as the reconciliation source of truth** - repair entity state from the event log on a detected row conflict rather than trusting the blind last-push outcome; (3) optionally a field-merge `conflictResolver` (per-field `updated_at` inside `attrs`) when both tiers start mutating the same rows.
-- Derived state (FTS5/vectors) is rebuilt locally in `lifeos-derived.db` and never participates in sync.
+The Workbench binary is Rust. `lifeos-api` is a Rust crate that owns the DB write token. Instead of a browser hitting `localhost:8080`, the Workbench **links `lifeos-api` as a library and calls it in one address space** - no HTTP, no JSON round-trip, no second process, no CORS.
 
----
+- The `127.0.0.1` HTTP server is retained **only** for external consumers that genuinely need it (scripts, future clients). The Telegram/Worker lane already talks to Turso directly, not through the local API, so it is unaffected.
+- Semantic search (`memvec`/mgrep), recall, and every `lifeos entity|edge|event` call become in-process function calls, not `fetch`.
+- The single-DB-token-owner + workspace-scoping + append-only-`events` invariants hold identically; they are enforced in the same Rust code, now called directly.
 
-## 5. Modules — the plugin system
+**This is what "Life OS inside the app, not bridged" means literally: one process, one address space.**
 
-Each module ships `modules/<id>/module.js` calling `osRegisterModule({...})` - the generalization of the knowledge-atlas's `atlasAdd` merge-by-id contract. A manifest is **declarative**: data + how to render generic entities, never DOM/router/DB code.
+### 2.3 Window: host terminal → own GPU cell-grid window
 
-```js
-osRegisterModule({
-  id, name, icon, color /* light palette */, num, version,
-  entityTypes: { <typeId>: { label, plural, icon,
-    attrs: { <field>: { type:'text|number|date|enum|ref|bool|secret', enum?, ref?, required? } },
-    display: { title, subtitle?, badge? }, lifecycle: [/* statuses */] } },
-  views: [ { id, label, kind:'list|board|table|calendar|detail|graph|gallery', type, groupBy?, sortBy?, filter?, columns? } ],
-  events:      [ /* emitted event types */ ],
-  botCommands: [ { cmd, help, handler } ],        // Telegram surface
-  agentTools:  [ { name, schema, impl, gated? } ],// harness surface; gated=true → draft/approve
-  integrations:[ { provider, scopes, onConnect } ],// OAuth/API providers this module uses
-  syncTargets: [ { kind:'notion', db, map } ],     // optional outbound sync, no lock-in
-  seed:        [ /* optional starter entities/edges */ ],
-});
-```
+The third change (added 2026-07): the Workbench stops borrowing a host terminal's screen and ships its **own window**.
+A thin frontend crate opens a `winit` window and paints the ratatui cell buffer with a `wgpu` glyph-atlas renderer (shaping via `cosmic-text`/`swash`: ligatures, emoji, fallback fonts, HiDPI) - the rendering half of a terminal emulator, implementing ratatui's `Backend` trait so **every existing pane, view, and keymap runs unmodified**.
 
-### Day-1 seed modules
+What this buys:
 
-- **Learning / Study** - the knowledge-atlas generalized to *any subject*: domains → topics → subtopics → resources, cross-domain edges, gaps inbox, spaced repetition, examiner/teach-back. Atlas data files wrapped via an `atlasAdd → osRegisterModule` shim. Telegram: `add topic`, `quiz me`, `what's due`.
-- **Tasks / Productivity** - tasks/projects/schedule; Kanban board + "today" list. Telegram: `/task`, `/done`, `/today`.
-- **Coding / Projects** - seeded from a git scan of the ~27 repos in `04_Projects`; status, gaps, CI/review state, harness links. Telegram: project status, what's blocked.
-- **Trading** - **from scratch (not `ai-trade`)**: trade journal (entry/exit/stop/target/R-multiple/PnL/emotion), reusable setups/playbooks, equity-curve from `events`. `thesis` edges to learning topics → journal and atlas are one graph. **Broker read-only; logging/analysis only**; order placement is human-gated and out-of-agent (see §7). Telegram: `/buy` (logs a *planned* trade), `/close`, `/pnl`.
-- **Social** - **multi-account OAuth** for Instagram, X, WhatsApp, Slack, Reddit, via **self-hosted Nango** (it *is* the encrypted token vault + OAuth dance + auto-refresh + ~800 providers). Nango's **Proxy** matches the security model exactly: the local API calls `nango.proxy({connectionId, endpoint})`, Nango injects the live token server-side, and the **agent only ever holds a `connectionId` handle, never a secret**. Each connected account is an `entity` (`type=social_account`) referencing a Nango `connectionId`; you hold **many accounts per platform** natively. **Kite (daily request-token) and WhatsApp Business Cloud are custom connectors** Nango doesn't model cleanly. The AI can **read** (feeds, mentions, DMs, threads) freely and **draft** posts/replies/DMs, but **publishing is human-gated** (draft → Telegram approve → publish via the same proxied connection), because it is outward and irreversible. Posts/mentions/threads are entities; engagement is `events`. Telegram: `/inbox`, `/draft`, approve/deny buttons.
-- **Marketing** - campaigns, a content calendar, audiences/segments, leads, channels, and analytics. Content is drafted with the `copywriting` + `marketingskills-ai-agents` skills, **publishes via Social** accounts (`publishes_to` edge), and **uses Design assets** (`uses_asset` edge); funnel/UTM metrics arrive as `events`. Outward sends (broadcast email, ad launch, scheduled posts) are human-gated. Telegram: campaign status, draft content, approve sends.
-- **Design** - **Figma (read+write)** via `mcp-figma`, **image/video generation** via `mcp-higgsfield`, plus a design-system/asset library. Entities: `design_file` (Figma ref), `component`, `token`, `asset` (exported media), `brief`. The AI can read/inspect Figma, generate assets, build/maintain a design system (`figma-generate-library`), and implement designs to code (`figma-implement-design`). Assets feed Marketing/Social via edges. Integration MCPs are loaded **on-demand via mcp-multiplexer** and unloaded after. Views include an asset **gallery** and a component library.
-
-Future domains (health, finance, CRM, …) are added the same way - via the self-extension builder. **You never enumerate domains up front.**
+- **Standalone app.** A `.app` bundle with dock icon, menu bar, native clipboard/IME, its own font/theme/padding control - Zed-adjacent visuals from a cell grid.
+- **Still terminal-weight.** No Electron, no webview, no retained-mode GUI toolkit; a glyph grid on the GPU is what Alacritty/Ghostty draw. One binary, a few tens of MB, instant start.
+- **The visual escape hatches collapse inward.** Owning the renderer means real inline images, smooth-pixel timelines/minimap, and per-cell decorations (squiggles, faded ghost text) no terminal protocol offers - see [§6](#6-what-the-cell-grid-can-and-cannot-do).
+- **The TUI mode survives for free** behind `workbench --tui` (same core, crossterm backend) for SSH and headless use.
 
 ---
 
-## 6. Self-extension — the headline feature
-
-An in-app "**+ Ask AI to add a module**" affordance grows the system by talking to it.
-
-**Mac online (synchronous):**
-1. `POST /api/module-request { prompt, workspace_id }` → `module_requests` row + `events('module.requested')`.
-2. `server/scaffold.js` drives the **Claude Agent SDK** (`@anthropic-ai/claude-agent-sdk`, `query({prompt, options})`) - not a raw `claude -p` subprocess - so tool-locking, structured output, and hooks are first-class. Restriction is **defense-in-depth, 3 layers**: (A) `allowedTools`/`disallowedTools` + `permissionMode: "dontAsk"` (hard-deny, headless-safe); (B) a **PreToolUse hook** that fails closed when a `Write`/`Edit` `file_path` escapes `modules/<id>/` (the dir scope `allowedTools` can't express; a hook deny holds even under bypass); (C) the built-in **macOS Seatbelt sandbox** (`failIfUnavailable: true`) confining any Bash child - in a git worktree it auto-allows shared `.git` writes so `git commit` works.
-3. The agent copies `modules/_template` → `modules/<id>/`, fills the manifest, and emits the manifest summary as **schema-validated structured output** (`outputFormat: {type:"json_schema", schema}` from a **Zod** source of truth; the SDK re-prompts on mismatch - no hand-rolled ajv retry loop).
-4. **Two validators:** structural (pure Node: manifest matches schema, no duplicate type ids, no dangling `view.type`) + render (headless Playwright against a **scratch derived/replica DB**, 0 JS errors, asserts an app-emitted `module-mounted:<id>` event, one bounded retry).
-5. Insert `modules` row + `events('module.installed')`; **SSE hot-reload** - new tile appears, no restart.
-6. On failure → `status='failed'` surfaced in-app, one retry.
-
-**Mac offline (queued):** Telegram `/addmodule …` → the bot writes `module_requests(status='queued')` to cloud Turso, replies "queued". A LaunchAgent poller on the Mac (modeled on `~/.claude/bin/route-daemon`) drains on wake, runs the identical local build, commits to git, bot notifies "✅ live".
-
-**Safety:** the cloud bot only enqueues; codegen only ever runs on the Mac; the agent writes only under `modules/` (never `core/`); every install is a git commit → one `git revert` away.
-
----
-
-## 7. Harness integration, permissions & the agent loop
-
-### Single writer + thin tools
-One local `lifeos` API (extending the atlas's zero-dep Node server; FastAPI acceptable) owns the DB write token at `127.0.0.1` and enforces **workspace scoping + auth**. Agent tools are **thin curl wrappers** in `~/.claude/bin/` (`lifeos entity|edge|event|job|config`, `tg send`, `social draft`, `design gen`), allow-listed in `settings.json`. **CRUD is never an MCP.** mcp-multiplexer hot-loads heavy MCPs (Figma, Higgsfield, social) only when needed; a bounded `UserPromptSubmit` context-injection hook replaces always-mounted MCPs.
-
-### Permission boundary (hard, layered)
-- **Common DB:** harness = full RW; Haiku bot = full RW **within its workspace**.
-- **Trading:** **read-only** for any agent/bot. No order tool registered anywhere; fail-closed `broker-guard` PreToolUse hook denies place/modify/cancel/GTT even if the Kite MCP is mis-loaded; broker keys read-scoped. Orders flow agent → `proposed_order` entity → Telegram approve → separate interactive `trade-exec` (never agent/hook/cron-callable, typed confirmation). **No autonomous trading.**
-- **Outward actions (social/marketing publish):** `gated` agent tools produce **drafts only**; publishing requires Telegram approval, then a worker/Mac executor calls the provider API.
-- **Secrets:** OAuth tokens live encrypted in `connections`, **never** in agent context; the API injects them at call time.
-- **`events` append-only:** no UPDATE/DELETE route, so even the RW token cannot rewrite history.
-
-### The four diagram gaps (reuse existing infra, near-zero new always-on cost)
-- **Event store** - the `events` table doubles as the harness run-log; a `lifeos-sync-events` bridge in the existing **Stop hook** joins `~/.claude/logs/route.jsonl` + `~/.claude/metrics/costs.jsonl` + `session-capture` into one append-only row per run. Cloud rows written by the Worker.
-- **Eval + Gate** - LLM-as-judge on the Mac via the existing `claude -p --model haiku` pattern (reusing archived `eval-harness`/`agent-eval` rubrics), **sampled + ship-class only + content-cached** → cents/day. `eval-gate` wraps the commit/sync/job-complete boundary; below threshold → `gated=1`, ship blocked, rationale to Telegram. Trade analysis judged on **data-grounding only, never PnL, never auto-acts**.
-- **Observe** - a `harness observe` case beside `route-stats`; reads `events` + quotas, breaks down tokens/cost/latency/error/gated per tier/module/phase, with a cloud free-tier + Haiku-spend meter.
-- **Release loop** - a `lifeos-release` learner turns logged outcomes into **candidate** versioned `configs` (incl. the "learned reranking prior" as a JSON bias on `route_core.py`); shadow-replayed → Telegram-approved → `config promote` (human-gated) flips active atomically; rollback = one pointer flip; every flip is an event.
-
-### Cloud ↔ Mac queue
-`jobs` table (kept in Turso - **not** Cloudflare Queues, whose free tier drops messages after 24h and splits the audit trail from `events`). No queue library (graphile-worker/pg-boss are Postgres-only; no mature libSQL queue exists). The atomic claim is a one-liner - `UPDATE jobs SET status='running', claimed_by=:w WHERE id=(SELECT id FROM jobs WHERE status='queued' ORDER BY priority DESC, created_at ASC LIMIT 1) RETURNING …` - plus a reaper that returns timed-out `running` rows to `queued` (handles a Mac crash mid-job). `module_requests` is the same pattern with its own lifecycle. Triggered by a `launchd` LaunchAgent poller (`StartInterval` + `RunAtLoad`, re-fires on wake). Turso is the only always-on piece.
-
----
-
-## 8. Interface
-
-A generalization of the `knowledge-atlas` SPA into a multi-module shell. **Implemented as a React + Vite SPA under `frontend/`** (the original plan called for a vanilla-JS no-build `core/`; that prototype was superseded and removed - see `frontend/FRONTEND.md` for the authoritative status).
-
-- **Reuse (concepts carried over):** the atlas router, SVG cross-module graph, markdown engine, search, `annotations`, `intelligence`.
-- **Implemented in `frontend/src/`:** `lib/moduleRegistry.js` (`osRegisterModule` contract) + `lib/moduleManifests.js`, `lib/db`/`lib/api.js` (libSQL + workspace context), soft auth, `core/renderers/{list,board,table,calendar,detail,graph,gallery,timeline,map}.jsx`, `index.css` design tokens, the seven manifests; plus `server/{scaffold,…}.js` for self-extension.
-
-Each module renders generically from its manifest's `views` + `entityTypes.display`: a trade → journal table + equity calendar; a task → Kanban board; a topic → atlas article + connection chips; a design asset → gallery; a campaign → calendar/funnel - all from the same `entities`/`edges` rows. You get cross-domain edges, one search index, one event log, and one graph across every module for free.
-
----
-
-## 9. Directory layout
+## 3. Three surfaces, one binary
 
 ```
-life-os/
-  frontend/                  # React + Vite SPA - the implemented UI (supersedes the
-    index.html               #   original vanilla `core/` prototype, now removed)
-    src/ main.jsx App.jsx    #   entry + React Router routes
-      components/ pages/      #   shell (Layout, AIConsole, CommandBar) + route pages
-      core/renderers/         #   generic list/board/table/calendar/gallery/… views
-      lib/                    #   api client, module registry/manifests, ai, vcs
-      index.css               #   Neo-Brutalist design tokens (Tailwind v4 @theme)
-  modules/
-    learning/  module.js data/01_dsa.js … 13_gpu.js   # migrated atlas data
-    tasks/     module.js
-    projects/  module.js                              # git-seeded
-    trading/   module.js                              # from scratch
-    social/    module.js                              # multi-account OAuth
-    marketing/ module.js
-    design/    module.js                              # Figma + Higgsfield
-    _template/ module.js views.md README.md           # scaffold skeleton
-  server/
-    server.js db.js auth.js bot.js sync.js scaffold.js oauth.js memvec.py memory.js
-  worker/                    # Cloudflare Worker: Telegram bot (Haiku) + OAuth callbacks
-  migrations/ 0001_core.sql 0002_control_plane.sql …
-  store/                     # offline write-queue / spool
+┌──────────────────────────────────────────────────────────────┐
+│  Life OS Workbench  (single Rust binary, own GPU window;       │
+│                      --tui fallback renders in any terminal)   │
+│                                                                │
+│  ┌───────────┬───────────┬────────────┬─────────────────────┐ │
+│  │ TERMINAL  │  EDITOR   │  AGENT     │  LIFE OS             │ │
+│  │ panes     │  (modal,  │  (ACP →    │  (TUI renderers over │ │
+│  │ (VTE+PTY) │  LSP, TS) │  harness)  │  module manifests)   │ │
+│  └─────┬─────┴─────┬─────┴──────┬─────┴──────────┬──────────┘ │
+│        │           │            │                │            │
+│   tiling / pane manager (Zellij-model) · command palette      │
+│        │           │            │                │            │
+│  ┌─────▼───────────▼────────────▼────────────────▼──────────┐ │
+│  │ in-process: lifeos-api · lifeos-vcs · memvec · DAP client │ │
+│  └───────────────────────────┬──────────────────────────────┘ │
+└──────────────────────────────┼─────────────────────────────────┘
+                               │ DAP (child process / thread)
+                    ┌──────────▼───────────┐
+                    │  Mirrorscope server  │  ← sibling repo
+                    │  (record/replay +    │
+                    │   semantic decoder)  │
+                    └──────────────────────┘
+```
+
+- **Terminal** - `alacritty_terminal` (VTE parsing) over `portable-pty`. A real terminal lives in an integrated bottom dock (one keybind or click away, session survives hiding), and any center pane can become one. "An IDE that perfectly joins with the terminal" is the _native state_, not a feature.
+- **Editor** - embed **Helix** core (`helix-core`/`helix-view`): rope buffer, multi-selection, tree-sitter highlighting, built-in LSP, zero config. We do **not** write an editor.
+- **Agent** - an **ACP (Agent Client Protocol)** client. Claude Code / the existing harness / any ACP agent plugs in interchangeably. Agent edits land in the buffer as a reviewable diff layer (accept/reject inline). We do **not** write a model.
+- **Life OS** - the TUI renderer backend from [§2.1](#21-frontend-react-spa--tui-renderers-over-the-same-manifests), driven by `lifeos-api` in-process.
+
+---
+
+## 4. Inherited from Life OS - do not re-derive or violate
+
+The fork keeps every upstream global invariant. Summarized (authoritative source: [`life-os/docs/`](https://github.com/chayan-bit/life-os)):
+
+1. **One generic schema, no per-domain tables.** Task/trade/topic/post/campaign/asset are rows in `entities`, keyed by `workspace_id` + `module` + `type` + `attrs` JSON. New domains = zero migration.
+2. **Multi-tenant from the first commit.** Every row carries `workspace_id`; personal use is one workspace.
+3. **Local-first, no lock-in.** libSQL embedded replica (`offline:true`); sync is last-push-wins with single-writer-per-row discipline and `events` as reconciliation truth.
+4. **Codegen only on the trusted Mac.** The cloud lane only enqueues; self-extension builds run locally behind two validators, each a revertable git commit.
+5. **Auditability over speed; gate the irreversible.** Append-only `events`; outward actions (social/marketing publish, sends, browser actions, any trade action) are human-gated.
+6. **Owned credentials only.** Nango vault + proxy; the agent holds a `connectionId`, never a token. Never the claude.ai MCP connectors.
+7. **Trading is read-only for any agent/bot.** `broker-guard` fails closed on place/modify/cancel/GTT; orders only via a separate human-typed-confirmation executor.
+8. **`events` is append-only.** No UPDATE/DELETE route.
+9. **Derived state in a separate un-synced DB** (`lifeos-derived.db`: FTS5 + sqlite-vec).
+10. **Rust where it is security- or throughput-critical.** Now _more_ of the stack is Rust, because the frontend is too.
+
+---
+
+## 5. Tech stack (fork deltas)
+
+| Layer             | Upstream Life OS                                 | Workbench                                                                         |
+| ----------------- | ------------------------------------------------ | --------------------------------------------------------------------------------- |
+| Presentation      | React + Vite SPA, Refine, Tailwind v4, Cytoscape | **ratatui** widgets → GPU cell grid (native window) or ANSI (`--tui`)             |
+| Window host       | — (browser window)                               | **`winit` + `wgpu` glyph-grid renderer** (cosmic-text/swash shaping, ligatures)   |
+| Config import     | — (none)                                         | **VS Code** settings/keybindings/themes + **WezTerm Lua** (`mlua`) importers      |
+| Editor            | — (none)                                         | **Helix core** (`helix-core`, `helix-view`) - rope, tree-sitter, LSP              |
+| Terminal          | — (browser)                                      | **`alacritty_terminal`** (VTE) + **`portable-pty`**                               |
+| Pane/session mgmt | — (browser tabs)                                 | **Zellij model** (tiling), or a small ratatui layout engine                       |
+| Client↔API        | HTTP `@libsql/client` fetch                      | **in-process crate link** to `lifeos-api`                                         |
+| Agent surface     | AI Console (React)                               | **ACP client** pane                                                               |
+| Debug surface     | — (none)                                         | **DAP client** → Mirrorscope ([§8](#8-mirrorscope-integration-the-debug-surface)) |
+| Backend (all)     | Rust services + libSQL + Nango + Worker/Telegram | **unchanged**                                                                     |
+| Mobile            | PWA                                              | dropped (Telegram lane covers it)                                                 |
+
+All additions are reuse: Helix, ratatui, alacritty's VTE, Zellij's model, ACP, DAP - none is hand-rolled. Net-new code is the **fusion glue** (renderer backend + pane manager wiring + agent/debug tool exposure), which is exactly the part with no prior art.
+
+---
+
+## 6. What the cell grid can and cannot do
+
+The UI model stays a monospace cell grid: everything reduces to styled text cells. But owning the renderer moves the boundary - the native window can draw _under and over_ the grid, which a host terminal never allowed.
+
+### Excellent (≈80% of daily use)
+
+Modal code editing, LSP, tree-sitter highlighting · terminal emulation · lists / tables / trees / Kanban boards / forms · command palette + fuzzy finder · markdown (styled) · sparkline/bar/line charts (equity curves, token/cost meters) · timeline scrubbers · async task trees. This covers the whole editor + debug surface and the structured majority of Life OS (tasks, learning, trading journal, projects, search, agent).
+
+### Native-window extras (new since owning the renderer)
+
+Because the glyph renderer is ours, the window mode adds first-class visuals **without leaving the grid model**:
+
+- **Real inline images** (textured quads in cell-aligned regions): galleries, Figma thumbnails, generated media, flamegraphs - no Kitty/Sixel protocol needed. The protocols remain the `--tui` path.
+- **Sub-cell decorations**: wavy diagnostic underlines, faded ghost text for edit predictions, blended selection/scrollbar/minimap strips, cursor animation - the Zed-polish tier.
+- **Font control**: user-chosen face, ligatures, emoji + fallback, per-theme padding.
+
+### The remaining visual tail - two escape hatches, in priority order
+
+1. **On-demand external viewer** for the true-graphical tail - large interactive graph exploration, Figma canvas editing, video playback: a keybind opens _just that artifact_ externally, only when asked. You pay for weight only in the rare heavy moment.
+2. **Canvas overlay panes** (wgpu-drawn, non-grid) reserved for _if_ graph/design work proves daily-critical - a deliberate, bounded exception; never make the whole app heavy to serve the tail.
+
+### Genuinely out of scope for the grid itself
+
+Cytoscape-class zoomable graph _editing_, Figma canvas _editing_, inline video/audio _playback_, proportional-font typography/animation, real maps. All routed to the escape hatches. See [`frontend/DESIGN.md`](./frontend/DESIGN.md) for how each `view.kind` renders and degrades in both window and `--tui` modes.
+
+---
+
+## 7. Editor + agent, concretely
+
+- The editor pane and a terminal pane share cwd, env, and the in-process `lifeos-api` handle - no IPC wall between "the code", "the shell", and "the life OS".
+- **Agentic coding** = the ACP agent's toolbelt is the existing harness: mgrep/memvec semantic search over code _and_ the second brain, `recall`/`remember`, skills routing, and MCPs. The agent reads your past decisions and OPINIONS while editing - something a browser IDE bridged to a separate CLI cannot do in one context.
+- Agent edits are a CRDT/diff layer on the Helix rope: propose → review inline → accept/reject, terminal-native (the equivalent of Cursor's "apply", CRDT-sound and in a terminal).
+
+---
+
+## 8. Mirrorscope integration (the debug surface)
+
+Contract: **DAP.** The Workbench is a DAP _client_; [Mirrorscope](https://github.com/chayan-bit/Mirrorscope) is a DAP _server_ with `reverseContinue`/`stepBack` plus custom requests (`listCheckpoints`, `taskTimeline`, `jumpToEvent`). Keep this boundary even though both are Rust - it keeps Mirrorscope independently usable (e.g. from VS Code) and separately valuable. Run the Mirrorscope server as a child process or in-process thread behind the DAP interface.
+
+The synergy: Mirrorscope's spec calls for a _"thin companion VS Code extension"_ to render its task-tree and scrub-timeline, because raw DAP clients can't. **The Workbench owns its client, so that companion UI is just native TUI panes** - no extension needed:
+
+| Mirrorscope output                          | Workbench pane                                            |
+| ------------------------------------------- | --------------------------------------------------------- |
+| Async logical stack / task tree             | TUI tree widget                                           |
+| Timeline / `taskTimeline`                   | horizontal scrubber (arrows scrub; Enter = `jumpToEvent`) |
+| `listCheckpoints`                           | list pane; select → replay-to-checkpoint                  |
+| Retroactive watchpoint ("every write to X") | results table                                             |
+| Waker causality ("why did this wake")       | small: inline tree; large: graphics-protocol image        |
+
+**The flagship capability - agentic time-travel debugging:** because the Workbench is both an ACP agent host _and_ a Mirrorscope DAP client, Mirrorscope's operations (`reverseContinue`, `setWatchpoint`, `jumpToEvent`, `readLogicalStack`) are exposed to the agent as tools. The agent can hit a failing test, replay to the fault, set a retroactive watchpoint on the corrupted value, scrub backward to the causing write, read the _logical async task state_ (not raw poll frames), and propose a fix - autonomously. No existing tool has this; it exists only because the editor, the agent, and the debugger live in one process.
+
+Debug sessions, checkpoints, and root-cause findings are written back as `events`/`entities` in the Coding/Projects module - searchable via memvec, versioned like everything else. Full protocol detail lives in the Mirrorscope repo's `README.md` §"Workbench integration".
+
+---
+
+## 9. The spine: why this is one system
+
+All three repos are instances of one primitive - **time-travel / replay over state**:
+
+- **Mirrorscope** = time-travel over _execution_ (checkpoint + deterministic replay).
+- **`lifeos-vcs`** = time-travel over _files_ (content-addressed history; "version history _is_ the `events` log").
+- **Life OS memory** = time-travel over _knowledge_ (append-only event-sourced `events`, bi-temporal forgetting).
+
+Three time machines, one append-only event model, one semantic index (memvec/mgrep over code + execution history + second brain), one agent operating across all of them. The product, stated in one line: **a terminal-weight personal computing surface where replay is the universal primitive and an agent can time-travel across your code's execution, your files' history, and your own memory.** That is the answer to "what is genuinely new here vs. building an IDE / a debugger / a Notion clone" - nothing on the market unifies those.
+
+---
+
+## 10. Directory layout (fork deltas)
+
+Inherited from upstream unchanged unless noted.
+
+```
+lifeos-workbench/
+  workbench/                  # NEW - the app core (Rust): panes, editor, agent, renderers
+    gui/                      #   NEW - standalone window host: winit + wgpu glyph grid,
+                              #         ratatui Backend impl, config importers (VS Code / WezTerm)
+    src/
+      shell/                  #   tiling pane manager (Zellij-model), command palette
+      terminal/               #   alacritty_terminal (VTE) + portable-pty panes
+      editor/                 #   Helix core embed (rope, tree-sitter, LSP)
+      agent/                  #   ACP client + review/apply diff layer
+      debug/                  #   DAP client → Mirrorscope; timeline/tree/watchpoint panes
+      lifeos_tui/             #   TUI renderer backend over module manifests
+      render/                 #   ratatui widgets + terminal-graphics-protocol images
+  modules/                    # UNCHANGED - declarative manifests (learning, tasks, …)
+  migrations/                 # UNCHANGED - 0001_core.sql, 0002_control_plane.sql, …
+  services/                   # UNCHANGED - lifeos-api, lifeos-vcs, lifeos-ingest, lifeos-drain, broker-guard
+  worker/                     # UNCHANGED - Cloudflare Worker (grammY bot, Haiku)
+  server/                     # scaffold.js (Agent SDK) + validators; memvec.py reused
+  frontend/                   # RETIRED - React SPA superseded by workbench/lifeos_tui;
+    DESIGN.md                 #   kept only for the TUI DESIGN system (rewritten)
+  docs/                       # upstream spec tree (still authoritative for the backend)
   CLAUDE.md README.md
 ```
 
----
-
-## 10. Build order (phased; each phase independently usable)
-
-1. **Foundations** - Turso project + `0001_core.sql` + `0002_control_plane.sql` (workspace/users/memberships/connections); local `lifeos` API (single DB-token owner, workspace-scoped); embedded-replica sync; thin `~/.claude/bin/lifeos` tool + allow-list; seed the personal workspace/user. → *agent can CRUD the common DB, tenant-aware.*
-2. **App shell + seed modules** - generalize the atlas into `core/` (light palette), `osRegisterModule`, generic `views/`; ship Learning, Tasks, Projects, Trading, Social, Marketing, Design. → *usable multi-module SPA over the DB.*
-3. **Integrations** - OAuth flows + encrypted `connections` for Instagram/X/WhatsApp/Slack/Reddit; Figma + Higgsfield via mcp-multiplexer; read paths live, write paths drafted. → *real accounts/files connected, AI can read & draft.*
-4. **Telegram lane (Haiku)** - Cloudflare Worker bot on Claude Haiku with full workspace DB + memory recall + audit; capture/query/medium actions; gated approve/deny for outward actions; enqueue heavy → `jobs`. → *control + capture from phone, laptop off.*
-5. **Self-extension builder** - `/api/module-request`, `scaffold.js`, `_template/`, two validators, SSE hot-reload, offline queued variant + drain poller. → *"ask AI to add a module" works.*
-6. **Harness loop** - event-store bridge, Eval+Gate, `harness observe`, Release loop, `broker-guard` + read-only broker tools + gated executors. → *everything logged, scored, auto-improved, boundaries enforced.*
-7. **SaaS hardening (when needed)** - real auth/sessions, database-per-workspace swap, plan/quota gating, billing. → *flip from personal to multi-tenant product.*
-
-Each phase ships with tests (≥80%, TDD) and a conventional-commit history.
+`frontend/`'s React sources become dead once `workbench/lifeos_tui` reaches parity; `frontend/DESIGN.md` is repurposed as the TUI design system.
 
 ---
 
-## 11. Verification (per phase)
+## 11. Build order (de-risk the spine first)
 
-- **DB/tools:** `lifeos entity create … && lifeos event add …`; assert rows + FTS5 hit + memvec recall; **workspace isolation** (a second workspace can't see the first's rows); kill cloud, write offline, reconnect, assert replica converges.
-- **SPA:** load offline then with the local API; each module's views render; cross-module graph draws from `edges`; search works; manual light/minimalist UI check.
-- **Integrations:** connect a throwaway account per provider; AI reads feed/mentions; a draft post is created but **not published** until approved; tokens stored encrypted, absent from agent context/logs.
-- **Telegram (Haiku):** with the Mac **off**, capture/query/`/pnl`/`/inbox`/`/addmodule` respond; outward action shows approve/deny and only acts on approve; heavy `/addmodule` shows `queued`; wake Mac → drain builds + notifies.
-- **Self-extension:** "add a health tracker" → new tile after validators; `git log` shows the commit; break the template → validator fails cleanly, no partial register.
-- **Permissions (must-pass):** order attempt via agent and via mis-loaded Kite MCP → `broker-guard` denies both; no order tool registered; `events` UPDATE/DELETE → 404; social publish blocked without approval; broker/social reads succeed.
-- **Harness loop:** `harness observe` shows tokens/cost/latency/gated per tier/module; a low-quality run is Eval-gated + Telegram rationale; `lifeos-release propose` → shadow-replayed candidate that only activates after human `config promote`.
+Each phase is independently usable and ships with tests (≥80%, TDD) + conventional commits.
+
+1. **Workbench shell** - tiling pane manager + embedded terminal (`alacritty_terminal`+`portable-pty`) + command palette. ✅ shipped.
+2. **Editor pane** - embed Helix core; a pane flips terminal→editor with shared cwd; LSP + tree-sitter free. ✅ shipped.
+3. **Life OS TUI renderer** - link `lifeos-api` in-process; `list`/`board`/`table`/`detail` renderers over existing manifests. ✅ shipped.
+4. **Agent pane (ACP)** - plug in the harness; agent edits as reviewable diffs; agent toolbelt + recall search. ✅ shipped.
+5. **Standalone window host** - `winit` + `wgpu` glyph-grid frontend implementing ratatui's `Backend`; keyboard/mouse/IME translation; `--tui` keeps the terminal mode. → _a real macOS app._
+6. **Zed-adjacent polish** - font/ligature/theme control, padding, smooth resize, sub-cell decorations (squiggles, ghost text), app bundle + icon.
+7. **Cursor-parity feature wave** - the full [§12](#12-cursor-parity-and-agent-native-roadmap) inventory: everything a first-rank IDE ships, tracked as issues.
+8. **Config importers** - VS Code (`settings.json`/`keybindings.json`/themes) and WezTerm (`wezterm.lua` via `mlua`); run automatically on first launch.
+9. **Mirrorscope DAP client** - only after Mirrorscope Phases 1-2 exist standalone; wire `stepBack` + task-tree + scrubber panes. → _time-travel debugging in the workbench._
+10. **Agentic time-travel debugging** - expose Mirrorscope's DAP ops to the agent. → _the flagship._
+11. **Visual-tail polish** - inline-image galleries (native quads; graphics protocol in `--tui`), external-viewer escape hatch, remaining renderers.
+
+Phases 1-8 are a shippable standalone lightweight agentic IDE with Life OS built in - _before_ touching the research-grade debugger.
 
 ---
 
-## 12. Tech stack
+## 12. Cursor-parity and agent-native roadmap
 
-| Layer | Choice | Why |
-|---|---|---|
-| Canonical DB | Turso / libSQL | SQLite-compatible (reuse FTS5/memvec), always-on, embedded replica = local-first, built for multi-tenant SaaS |
-| Always-on compute | Cloudflare Workers (free) | Scale-to-zero, webhook-shaped; hosts bot + OAuth callbacks |
-| Bot LLM | **Claude Haiku** | Capable + cheap; full DB + memory + audit on the always-on lane |
-| Heavy-lane LLM | Claude (existing Claude Code harness) | Deep reasoning, codegen, Eval/Release |
-| Bot transport | Telegram | Free, ubiquitous, works laptop-off |
-| Telegram framework | **grammY** (MIT) | Native Cloudflare Workers adapter (`webhookCallback(bot,"cloudflare-mod")`), inline approve/deny keyboards |
-| DB access | **Drizzle ORM** + `@libsql/client` (MIT) | Typed access to `entities/edges/events`; `/web` import on the Worker (no FS/TCP), embedded-replica `syncUrl` on the Mac |
-| Frontend | Vanilla-JS SPA (generalized knowledge-atlas); **Refine** (MIT) for the admin shell + generic views | No-build core; Refine's backend-agnostic `dataProvider` deletes most list/board/table/calendar/gallery wiring; bring-your-own graph (Cytoscape) |
-| Local API | Node (extend atlas server) / FastAPI | Single DB-token owner, workspace-scoped |
-| Semantic search | sqlite-vec + MiniLM-384 (`memvec.py`) in a separate un-synced `lifeos-derived.db` | Reuse existing harness infra; native libSQL vectors rejected (beta, would couple derived state to the synced DB) |
-| Self-extension | **Claude Agent SDK** (`@anthropic-ai/claude-agent-sdk`) | First-class tool-locking, PreToolUse path hook, Seatbelt sandbox, worktree isolation, schema-validated structured output (Zod) |
-| Integrations / OAuth vault | **Self-hosted Nango** (Elastic License 2.0) + Figma/Higgsfield via mcp-multiplexer | ~800 providers, encrypted tokens, auto-refresh, **Proxy** keeps secrets out of agent context; Kite + WhatsApp as custom connectors |
-| Secrets | Nango-managed encrypted tokens + per-workspace envelope key for non-OAuth | SaaS-safe, never in agent context (agent holds only a `connectionId`) |
+The release bar is "no reason to open Cursor or Zed for daily work". The feature inventory lives as GitHub issues (label `parity` / `agent-native`); the shape of it:
+
+**Editor/IDE table stakes** - fuzzy goto-anything (files/symbols/lines), project-wide search & replace (regex, preview), multi-cursor via Helix selections, full LSP surface (rename, code actions, inlay hints, diagnostics panel, signature help), git integration (gutter, hunk stage/revert, blame, log/diff panes), session/workspace restore, format-on-save, snippets, bracket-pair handling, settings file with live reload, per-language config.
+
+**Cursor-class agentic features** - inline edit (select region → prompt → diff), edit prediction / next-edit ghost text, codebase index for @-mentions (memvec already is this), rules files (`AGENTS.md`/`CLAUDE.md` honored natively), agent checkpoints & rewind (snapshot before each agent apply; one-key restore), background/parallel agents in git worktrees, agent terminal use (the agent already lives beside real PTY panes), plan/todo surface rendered as a native pane, MCP client + the `--mcp` toolbelt server already shipped.
+
+**Agent-native beyond Cursor** (the differentiators this architecture makes cheap):
+
+- Agent edits, checkpoints, and sessions written to append-only `events` - agent history is queryable/replayable like everything else (time-travel over the agent itself).
+- The agent sees the _same_ in-process state as the UI: Life OS entities, recall/memvec, editor buffers, terminal scrollback - no external-bridge staleness.
+- Every pane is scriptable by the agent (open/focus/split/render a view) via the toolbelt, so the agent can drive the IDE, not just the buffer.
+- Mirrorscope DAP ops as agent tools (phase 10) - replay-to-fault debugging no other IDE has.
 
 ---
 
 ---
 
-## 13. Owned-integration model (replaces claude.ai MCP connectors)
+## 13. Status
 
-**Hard rule: every third-party integration uses credentials WE own, never a claude.ai connector.**
-The Gmail/Calendar/Drive/Notion/Slack MCPs live inside a claude.ai *lead* account that is not ours; depending on them is fragile and not SaaS-ready.
-Instead, **self-hosted Nango** is the OAuth vault for all API providers (Google, Notion, Slack, Instagram, X, Reddit, Figma, GitHub): it runs the OAuth dance, stores tokens encrypted, auto-refreshes, and its **Proxy** injects the live token server-side so the **agent only ever holds a `connectionId`, never a secret**.
-Non-OAuth providers (Zerodha Kite daily-token, WhatsApp Business Cloud) are native custom connectors.
-Anything with no API at all is driven by a **browser actuator** (fork of `browser-use/browser-harness`), Mac-only and fully gated.
-MCPs are reserved for heavy on-demand *capability* tools (Figma, Higgsfield, game engines), never credentialed connectors.
-Full detail: [`docs/INTEGRATIONS.md`](./docs/INTEGRATIONS.md).
-
-## 14. Extended capabilities
-
-- **Universal version control (`lifeos-vcs`)** - the headline differentiator: git-style history, branches, tags, semantic diffs, and time-travel over **every file type** (video, image, design, 3D, audio, docs), not just code. Content-addressed (BLAKE3 + FastCDC chunking), modeled on Jujutsu, with per-type semantic diff plugins. Version history *is* the append-only `events` log. A **Rust** service. See [`docs/VERSIONING.md`](./docs/VERSIONING.md).
-- **Media intelligence (`lifeos-ingest`)** - "find the clip where I said X" across your library. memvec is text-only, so a Rust pipeline transcribes (whisper-rs), captions, and parses media into timestamped `segment` entities that memvec embeds. Optional CLIP for true visual search. See [`docs/MEDIA-INTELLIGENCE.md`](./docs/MEDIA-INTELLIGENCE.md).
-- **GitHub connector + "Life OS Actions"** - manage all repos (issues/PRs/CI/releases) as entities; event-triggered AI automation on *any* entity (`on asset.version_created → draft post`), GitHub-Actions-style but for everything.
-- **New modules** - Email, Calendar, Files, Notion, Slack, Reading, Travel - all manifests over the existing schema, owned-OAuth via Nango. See [`docs/MODULES.md`](./docs/MODULES.md).
-- **Platform systems** - universal command bar, user/module agent pipelines (DAGs via the Agent SDK), per-module dashboards derived from `events` (zero new storage), a signed module marketplace (the SaaS seam), and a PWA. See [`docs/PLATFORM-SYSTEMS.md`](./docs/PLATFORM-SYSTEMS.md).
-- **Game-dev connectors** - Godot/Unity/Unreal via mcp-game-engines; Godot `.tscn` scenes are text → first-class semantic diffs in `lifeos-vcs` for free.
-
-## 15. Detailed specification
-
-This README is the narrative superset. The deep, authoritative specification lives in [`docs/`](./docs/ARCHITECTURE.md):
-data model, every module, the owned-integration model, `lifeos-vcs`, media intelligence, self-extension, the harness loop, platform systems, the Rust component inventory, the security model, the phased build plan, and the licensing/reuse audit.
-
----
-
-*Status: design-complete specification, pre-implementation. See `CLAUDE.md` for working rules, [`docs/`](./docs/ARCHITECTURE.md) for the full spec, and §10 / `docs/BUILD-PLAN.md` for the phased build.*
+Phases 1-4 implemented (shell, editor, Life OS renderers, agent pane - all working today in `--tui` form). Current front: the standalone `winit`+`wgpu` window host (phase 5), then the Cursor-parity wave and config importers. Backend inherited from upstream Life OS unchanged. See `CLAUDE.md` for working rules, [`frontend/DESIGN.md`](./frontend/DESIGN.md) for the cell-grid design system, and `docs/` (upstream) for the authoritative backend spec.
